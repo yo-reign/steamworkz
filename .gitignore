@@ -1,0 +1,11 @@
+.zig-cache/
+zig-out/
+zig-pkg/
+.DS_Store
+/sdk/
+/sdks/
+/compile_commands.json
+/.cache/
+/.pi/
+zls.build.json
+steam_appid.txt

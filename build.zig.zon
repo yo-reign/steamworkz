@@ -1,0 +1,20 @@
+.{
+    .name = .steamworkz,
+    .version = "0.1.0",
+    .fingerprint = 0x1b007cc4ef7552cb,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "c",
+        "examples",
+        "README.md",
+        "LICENSE",
+        "ROADMAP.md",
+        "CHECKPOINT.md",
+        "tests/consumer/build.zig",
+        "tests/consumer/build.zig.zon",
+        "tests/consumer/main.zig",
+    },
+}
