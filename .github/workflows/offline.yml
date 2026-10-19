@@ -1,0 +1,76 @@
+name: Private offline validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'yo-reign/steamworkz' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, macOS, ARM64, steamworkz-sdk-165, zig-0-16-0]
+    timeout-minutes: 60
+    steps:
+      # No third-party actions, credential persistence, caches or artifact uploads.
+      - name: Validate trusted source with private runner-local evidence
+        shell: bash
+        env:
+          TRUSTED_REVISION: ${{ github.sha }}
+        run: |
+          umask 077
+          if [[ -z "${STEAMWORKZ_PRIVATE_ROOT:-}" || -z "${STEAMWORKS_SDK:-}" ]]; then
+            printf '%s\n' 'FAIL: private runner prerequisites missing'
+            exit 1
+          fi
+          # Validate resolved boundaries before creating anything: a mistaken
+          # private-root setting must not put logs or build output in the SDK.
+          if ! python3 - <<'PY' >/dev/null 2>&1
+          import os
+          from pathlib import Path
+          private = Path(os.environ["STEAMWORKZ_PRIVATE_ROOT"])
+          sdk = Path(os.environ["STEAMWORKS_SDK"])
+          if not private.is_absolute() or not sdk.is_absolute():
+              raise SystemExit(1)
+          private, sdk = private.resolve(strict=True), sdk.resolve(strict=True)
+          if (not private.is_dir() or not (sdk / "public").is_dir() or not (sdk / "redistributable_bin").is_dir()
+                  or private.is_relative_to(sdk) or sdk.is_relative_to(private)):
+              raise SystemExit(1)
+          PY
+          then
+            printf '%s\n' 'FAIL: private evidence and SDK paths must exist and be disjoint'
+            exit 1
+          fi
+          if ! work=$(mktemp -d "${STEAMWORKZ_PRIVATE_ROOT}/offline.XXXXXXXX" 2>/dev/null); then
+            printf '%s\n' 'FAIL: private evidence directory unavailable'
+            exit 1
+          fi
+          set +e
+          (
+            set -euo pipefail
+            test "$(zig version)" = 0.16.0
+            test -d "$STEAMWORKS_SDK/public"
+            export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+            export GIT_TERMINAL_PROMPT=0
+            git init "$work/source"
+            cd "$work/source"
+            git -c credential.helper= fetch --depth=1 https://github.com/yo-reign/steamworkz.git "$TRUSTED_REVISION"
+            git checkout --detach FETCH_HEAD
+            test "$(git rev-parse HEAD)" = "$TRUSTED_REVISION"
+            for mode in Debug ReleaseSafe ReleaseFast ReleaseSmall; do
+              zig build test -Dsdk="$STEAMWORKS_SDK" -Doptimize="$mode" --cache-dir "$work/cache" --global-cache-dir "$work/global" --summary all > "$work/test-$mode.log" 2>&1
+            done
+            for target in aarch64-macos x86_64-macos x86_64-linux-gnu x86_64-windows-gnu; do
+              zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Doptimize=ReleaseFast -Dtarget="$target" --cache-dir "$work/cache" --global-cache-dir "$work/global" --summary all > "$work/compile-$target.log" 2>&1
+            done
+            python3 tests/offline/check.py --sdk "$STEAMWORKS_SDK" --evidence "$work/package" --run-consumer
+            git diff --check
+            test -z "$(git status --porcelain)"
+          ) > "$work/ci.log" 2>&1
+          result=$?
+          if [[ "$result" -eq 0 ]]; then
+            printf '%s\n' 'PASS: trusted offline checks (Zig 0.16.0); evidence retained privately'
+          else
+            printf '%s\n' 'FAIL: offline checks; authorized maintainer must inspect runner-local evidence'
+            exit 1
+          fi

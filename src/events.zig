@@ -230,3 +230,30 @@ test "web ticket length is checked before exposing its bytes" {
     native.data.web_ticket.size = native.data.web_ticket.bytes.len + 1;
     try std.testing.expect(decode(&native).payload == .malformed);
 }
+
+test "property web ticket boundary lengths copy binary payload and correlation" {
+    for ([_]u32{ 0, 1, 2559, 2560, 2561, std.math.maxInt(u32) }) |size| {
+        var native = std.mem.zeroes(c.SwEvent);
+        native.kind = c.SW_WEB_TICKET;
+        native.call = 0xfedcba9876543210;
+        native.callback_id = 168;
+        native.data.web_ticket.size = size;
+        native.data.web_ticket.result = -123456;
+        native.data.web_ticket.ticket = 0xfedcba98;
+        for (&native.data.web_ticket.bytes, 0..) |*byte, i| byte.* = @truncate(i);
+        const event = decode(&native);
+        @memset(&native.data.web_ticket.bytes, 0xaa);
+        try std.testing.expectEqual(@as(u64, 0xfedcba9876543210), @intFromEnum(event.call));
+        try std.testing.expectEqual(@as(i32, 168), event.callback_id);
+        if (size > 2560) {
+            try std.testing.expect(event.payload == .malformed);
+        } else {
+            const ticket = event.payload.web_ticket;
+            try std.testing.expectEqual(size, ticket.size);
+            try std.testing.expectEqual(@as(i32, -123456), @intFromEnum(ticket.result));
+            try std.testing.expectEqual(@as(u32, 0xfedcba98), @intFromEnum(ticket.ticket));
+            // Only the declared prefix is ticket data; do not constrain unused storage.
+            for (ticket.bytes[0..size], 0..) |byte, i| try std.testing.expectEqual(@as(u8, @truncate(i)), byte);
+        }
+    }
+}

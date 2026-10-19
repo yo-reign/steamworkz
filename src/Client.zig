@@ -210,3 +210,83 @@ test "native initialization failure releases process ownership and keeps diagnos
 test "analyze every public client method" {
     std.testing.refAllDecls(Client);
 }
+
+// Synthetic ownership only: successful native initialization is deliberately absent.
+fn claimTestClient(client: *Client) !void {
+    try client.context.claim();
+    client.pipe = 0;
+}
+
+fn fatalMarker(comptime name: []const u8) !void {
+    try std.Io.File.stderr().writeStreamingAll(std.testing.io, "STEAMWORKZ_FATAL_READY:" ++ name ++ "\n");
+}
+
+test "lifecycle control stable client and renewed empty receive" {
+    var client: Client = undefined;
+    try claimTestClient(&client);
+    var empty: [0]Networking.Message = .{};
+    var batch = try client.networking().receive(.invalid, &empty);
+    batch.deinit();
+    client.context.checkCanClose();
+    client.context.release();
+    try claimTestClient(&client);
+    defer client.context.release();
+    batch = try client.networking().receive(.invalid, &empty);
+    batch.deinit();
+    const lease = client.context.lease();
+    lease.acquireMessage();
+    lease.releaseMessage();
+    client.context.checkCanClose();
+}
+
+test "lifecycle fatal wrong-thread" {
+    if (!@import("steamworkz_test_options").fatal_lifecycle) return error.SkipZigTest;
+    var client: Client = undefined;
+    try claimTestClient(&client);
+    defer client.context.release();
+    _ = client.networking(); // Adjacent owner-thread control.
+    const Foreign = struct {
+        fn run(value: *Client) void {
+            fatalMarker("wrong-thread") catch return;
+            _ = value.networking();
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Foreign.run, .{&client});
+    thread.join();
+}
+
+test "lifecycle fatal moved-client" {
+    if (!@import("steamworkz_test_options").fatal_lifecycle) return error.SkipZigTest;
+    var client: Client = undefined;
+    try claimTestClient(&client);
+    defer client.context.release();
+    _ = client.networking();
+    var copy = client;
+    try fatalMarker("moved-client");
+    _ = copy.networking();
+}
+
+test "lifecycle fatal stale-lease" {
+    if (!@import("steamworkz_test_options").fatal_lifecycle) return error.SkipZigTest;
+    var client: Client = undefined;
+    try claimTestClient(&client);
+    const old = client.networking();
+    client.context.release();
+    try claimTestClient(&client); // Same address: only the generation changed.
+    defer client.context.release();
+    var empty: [0]Networking.Message = .{};
+    var fresh = try client.networking().receive(.invalid, &empty);
+    fresh.deinit();
+    try fatalMarker("stale-lease");
+    _ = try old.receive(.invalid, &empty);
+}
+
+test "lifecycle fatal outstanding-message" {
+    if (!@import("steamworkz_test_options").fatal_lifecycle) return error.SkipZigTest;
+    var client: Client = undefined;
+    try claimTestClient(&client);
+    client.context.checkCanClose();
+    client.context.lease().acquireMessage();
+    try fatalMarker("outstanding-message");
+    client.deinit(); // Must panic before sw_shutdown.
+}

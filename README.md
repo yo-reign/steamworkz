@@ -38,9 +38,12 @@ It does not require an additional C++ standard library.
 | Command | Effect |
 | --- | --- |
 | `zig build` | Compile/link the headless example; install it and the runtime |
-| `zig build test` | Run offline Zig tests and three C++ fixtures, plus the consumer build regression |
-| `zig build test-compile -Dtarget=x86_64-linux-gnu` | Compile/link tests and the consumer without executing target binaries |
-| `zig build test-consumer` | Compile/link and install a real dependency consumer into the build cache, without running it |
+| `zig build test` | Run offline Zig tests, four C++ fixtures, lifecycle checks, and the consumer/probes |
+| `zig build test-core` / `test-services` | Run the focused native callback or inert service-adapter fixture |
+| `zig build test-lifecycle` | Check public fatal guards in separate bounded processes, with passing controls |
+| `zig build test-properties` | Run deterministic bounded parser/text/event properties |
+| `zig build test-compile -Dtarget=x86_64-linux-gnu` | Compile/link tests, fatal artifacts, runner, fixtures and consumer/probes without target execution |
+| `zig build test-consumer` | Compile/link/install a dependency consumer and check expected compile failures, without running the consumer |
 | `zig build live-test` | Explicitly initialize Steam and run the bounded live checks |
 | `zig build tooling` | Write a local, gitignored `compile_commands.json` for native C++ editor analysis |
 
@@ -53,11 +56,21 @@ the package without command-line build options.
 
 `tests/consumer` is an independent project that uses `b.dependency`, the exported
 module, and both public runtime helpers. `test` and `test-compile` include this
-regression. It checks supplied target/optimization options and SDK propagation.
+regression. It checks target, CPU model/features, optimization and SDK propagation.
+It retains an uncalled native-backed export and rejects unsupported request kinds
+and implicit integer image handles with the intended compiler diagnostics.
 It installs the consumer and official runtime only into an ignored cache output.
 It constructs a cached-run command but never executes it or initializes Steam.
 The package manifest includes the fixture sources, not its generated outputs.
 The independent fixture uses the same SDK option/environment precedence.
+
+Normal tests skip the intentional panic bodies. Separate filtered executables
+check their markers, panic diagnostics, termination and total-process deadlines.
+No Python is needed by ordinary Zig builds or tests. The optional maintainer
+source/archive/runtime checker uses Python's standard library; see
+[offline validation](tests/offline/README.md). It can explicitly run the pure
+installed consumer, never the live smoke program. Prepared CI is manual and
+restricted to trusted SDK-provisioned runners; it has not been executed.
 ZLS can also receive the option through a local `zls.build.json`. Do not commit
 machine-specific SDK paths.
 
@@ -415,10 +428,14 @@ or scene-readiness protocol is provided. The library also omits legacy P2P,
 SteamVR, inventory/purchases, server browsing/administration, custom signaling,
 Workshop, leaderboards, and input APIs.
 
-Offline tests cover ownership, init-failure rollback, generations/thread checks,
-message validation/release, request validation, C callback copying/correlation,
-future enum values, and malformed native results. Public method bodies are
-analyzed, and C++ fixtures compile against the SDK rather than copied layouts.
+Offline tests cover ownership, init-failure rollback, actual public lifecycle
+panic paths, message validation/release, request validation, all exposed native
+completion paths, callback copying, malformed payloads and deterministic
+address/text/event properties. Inert service fixtures check SDK argument/output
+forwarding without invoking Steam services. Public method bodies are also
+analyzed; analysis is not service execution. C++ fixtures compile against the
+SDK rather than copied layouts. Offline identity text is substituted because
+Valve's formatter requires a live interface.
 
 Current execution state and evidence are recorded in [CHECKPOINT.md](CHECKPOINT.md);
 planned work and acceptance gates are in [ROADMAP.md](ROADMAP.md). Historical

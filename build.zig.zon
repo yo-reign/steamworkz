@@ -16,5 +16,10 @@
         "tests/consumer/build.zig",
         "tests/consumer/build.zig.zon",
         "tests/consumer/main.zig",
+        "tests/consumer/invalid_request.zig",
+        "tests/consumer/invalid_image.zig",
+        "tests/lifecycle_runner.zig",
+        "tests/offline/check.py",
+        "tests/offline/README.md",
     },
 }

@@ -57,7 +57,7 @@ This evidence predates extraction and new features. Revalidate changed contracts
 | PKG-01 | Extract the owned package into its own local Git repository | Original source retained, source provenance recorded, no SDK or generated output copied | accepted |
 | PKG-02 | Rename package, module, examples, current docs, and consumer recipe to Steamworkz | Real consumer uses `@import("steamworkz")`; no obsolete first-party branding | accepted |
 | PKG-03 | Require an external user-supplied SDK | Missing SDK produces an actionable error; explicit SDK overrides environment; no automatic SDK download | accepted |
-| PKG-04 | Publish immutable source and migrate the game | URL/hash dependency works from a fresh cache without vendored source; default game stays SDK-free | pending; destination verified |
+| PKG-04 | Publish immutable source and migrate the game | URL/hash dependency works from a fresh cache without vendored source; default game stays SDK-free | initial publication and remote consumer passed; game migration pending |
 | PKG-05 | Audit source-package contents | Manifest/archive exclude SDK, runtime binaries, caches, private reports, credentials, and machine-specific paths | accepted; repeat at each publication |
 | PKG-06 | Document installation, lifecycle, migration, and release limits | Public recipes describe only accepted behavior and distinguish development App ID from shipping policy | accepted for bootstrap; expand with each API stage |
 
@@ -65,18 +65,22 @@ This evidence predates extraction and new features. Revalidate changed contracts
 
 | ID | Work | Acceptance | State |
 | --- | --- | --- | --- |
-| TEST-01 | Services-adapter fixtures | Exercise argument forwarding and native outputs for friends/apps/images/stats/cloud, including meaningful failures | pending |
-| TEST-02 | Every exposed native call-result path | Lobby create/enter/list, user stats, and async writes cover success, retrieval/I/O failure, malformed payload, correlation, and exactly-once release | pending |
-| TEST-03 | Public fatal lifecycle paths | Subprocess tests cover wrong thread, moved client, stale lease, access after message release, and shutdown with outstanding messages in Debug and ReleaseFast | pending |
-| TEST-04 | Bounded parser and decoder properties | Reproducible cases exercise numeric addresses, malformed callback sizes/pointers, unknown enums, and bounded copies | pending |
-| TEST-05 | Consumer and packaging regressions | Supplied target/optimization/SDK propagate; source-only package builds away from checkout; installed runtime matches supplied SDK | pending |
-| TEST-06 | Repeatable offline CI | Privately provisioned SDK, no SDK publication in caches/artifacts, no required Steam login, no implicit live writes | pending |
+| TEST-01 | Services-adapter fixtures | Exercise argument forwarding and native outputs for friends/apps/images/stats/cloud, including meaningful failures | accepted |
+| TEST-02 | Every exposed native call-result path | Lobby create/enter/list, user stats, and async writes cover success, retrieval/I/O failure, malformed payload, correlation, and exactly-once release | accepted |
+| TEST-03 | Public fatal lifecycle paths | Subprocess tests cover wrong thread, moved client, stale lease, access after message release, and shutdown with outstanding messages in Debug and ReleaseFast | accepted; all four modes, including reviewed runner cleanup |
+| TEST-04 | Bounded parser and decoder properties | Reproducible cases exercise numeric addresses, malformed callback sizes/pointers, unknown enums, and bounded copies | accepted |
+| TEST-05 | Consumer and packaging regressions | Supplied target/optimization/SDK propagate; source-only package builds away from checkout; installed runtime matches supplied SDK | accepted; repeat source/archive audit at publication |
+| TEST-06 | Repeatable offline CI | Privately provisioned SDK, no SDK publication in caches/artifacts, no required Steam login, no implicit live writes | preparation accepted; actual CI not run |
 
 Test private helpers in their owning files. Do not expose test-only public wrappers.
 Test behavior and lifecycle, not incidental default values or presentation constants.
-The callback fixture currently specializes result retrieval to lobby creation.
-The services adapter currently has no dedicated native fixture.
-Existing validation-helper tests do not replace tests of the public fatal paths.
+The bootstrap callback fixture specialized result retrieval to lobby creation and had no dedicated services fixture.
+Completed component handoffs expand all five result types, add inert service-adapter coverage, and test actual public fatal paths.
+Permanent registration and aggregate native/cross-target checks passed. Independent review then found one P2 in the runner's failed-exec cleanup, originating in Zig 0.16's POSIX spawn-error path.
+The parent confirmed the missing reaping assertion fails and assigned a narrow isolated repair. That repair passed focused checks and independent review; the original P2 is resolved.
+A separate temporary-path follow-up satisfies the unchanged source checker. Its four-mode/four-target checks, actual archive audit and changed-scope review passed.
+The parent integrated the final runner and accepted M1 source after the integrated source/archive audit. Repeat the document-inclusive archive and staged-tree checks at publication. This source acceptance does not establish non-host runtime or service readiness.
+CI preparation does not imply runner provisioning, dispatch authority or an executed CI pass.
 
 ### M2 — Networking tools and traffic control
 

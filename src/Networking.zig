@@ -593,3 +593,84 @@ test "receive limits and message validation reject invalid ownership without nat
     try Message.validate(view);
     try std.testing.expectEqual(@as(usize, 0), context.messages);
 }
+
+test "lifecycle fatal released-message" {
+    if (!@import("steamworkz_test_options").fatal_lifecycle) return error.SkipZigTest;
+    const Fixture = struct {
+        fn release(handle: [*c]?*c.SwMessage) callconv(.c) void {
+            handle[0] = null;
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    var token: u8 = 0;
+    const payload = "owned fixture bytes";
+    var view = std.mem.zeroes(c.SwMessageView);
+    view.handle = @ptrCast(&token);
+    view.data = payload.ptr;
+    view.size = payload.len;
+    var message = Message.adopt(context.lease(), view);
+    try std.testing.expectEqualStrings(payload, message.bytes());
+    message.releaseWith(Fixture.release);
+    try std.testing.expectEqual(@as(usize, 0), context.messages);
+    try std.Io.File.stderr().writeStreamingAll(std.testing.io, "STEAMWORKZ_FATAL_READY:released-message\n");
+    _ = message.bytes();
+}
+
+test "property Address deterministic bytes and ports round trip" {
+    var prng = std.Random.DefaultPrng.init(0x535741444452);
+    const random = prng.random();
+    for (0..256) |index| {
+        errdefer std.debug.print("Address seed=0x535741444452 case={d}\n", .{index});
+        var address: Address = .{ .port = switch ((index / 4) % 4) {
+            0 => 0,
+            1 => 65535,
+            else => random.int(u16),
+        } };
+        random.bytes(&address.ipv6);
+        switch (index % 4) {
+            0 => { // IPv4-mapped bytes.
+                @memset(address.ipv6[0..10], 0);
+                address.ipv6[10] = 0xff;
+                address.ipv6[11] = 0xff;
+            },
+            1 => @memset(address.ipv6[0 .. index % 17], 0),
+            2 => @memset(address.ipv6[index % 17 ..], 0),
+            else => {},
+        }
+        var buffer: [address_text_size]u8 = undefined;
+        const formatted = try std.fmt.bufPrint(&buffer, "{f}", .{address});
+        try std.testing.expectEqualDeep(address, try Address.parse(formatted));
+        var mutation: [address_text_size + 16]u8 = undefined;
+        for ([_][]const u8{ "%scope", "\x00", "]", ":65536" }) |suffix| {
+            const malformed = try std.fmt.bufPrint(&mutation, "{s}{s}", .{ formatted, suffix });
+            try std.testing.expectError(error.InvalidAddress, Address.parse(malformed));
+        }
+    }
+}
+
+test "property Address bounded arbitrary strings and malformed numeric mutations" {
+    var prng = std.Random.DefaultPrng.init(0x53575041525345);
+    const random = prng.random();
+    var input: [64]u8 = undefined;
+    for (0..512) |index| {
+        errdefer std.debug.print("Address seed=0x53575041525345 case={d}\n", .{index});
+        const length = index % (input.len + 1);
+        random.bytes(input[0..length]);
+        if (index % 2 == 0) {
+            const alphabet = "0123456789abcdef:.[]%";
+            for (input[0..length]) |*byte| byte.* = alphabet[byte.* % alphabet.len];
+        }
+        if (Address.parse(input[0..length])) |address| {
+            var buffer: [address_text_size]u8 = undefined;
+            try std.testing.expectEqualDeep(address, try Address.parse(try std.fmt.bufPrint(&buffer, "{f}", .{address})));
+        } else |err| try std.testing.expectEqual(error.InvalidAddress, err);
+    }
+    for (0..32) |index| {
+        var buffer: [128]u8 = undefined;
+        inline for (.{ "[::1]:+{d}", "[::1]:{d}_0", "[::1:{d}", "::ffff:{d}::1", "[fe80::{d}%1]:80", "127.0.0.1:{d}\x00" }) |pattern| {
+            try std.testing.expectError(error.InvalidAddress, Address.parse(try std.fmt.bufPrint(&buffer, pattern, .{index})));
+        }
+    }
+}

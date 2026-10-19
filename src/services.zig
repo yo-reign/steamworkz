@@ -493,6 +493,35 @@ test "invalid typed image handles are rejected before calling Steam" {
     try std.testing.expectError(error.InvalidImage, friends.imageSize(@enumFromInt(-1)));
 }
 
+test "Friends rejects oversized presence and invalid overlay targets before Steam" {
+    var context: Context = undefined;
+    const friends: Friends = .{ .lease = .{ .context = &context, .generation = 0 } };
+    try std.testing.expectError(error.TooLarge, friends.setPresence("k" ** 64, null));
+    try std.testing.expectError(error.TooLarge, friends.setPresence("key", "v" ** 256));
+    try std.testing.expectError(error.InvalidApp, friends.openStore(.invalid));
+    try std.testing.expectError(error.InvalidLobby, friends.openInvite(.invalid));
+}
+
+test "Stats rejects nonfinite values and impossible achievement progress before Steam" {
+    var context: Context = undefined;
+    const stats: Stats = .{ .lease = .{ .context = &context, .generation = 0 } };
+    for ([_]f32{ std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32) }) |value| {
+        try std.testing.expectError(error.InvalidValue, stats.setFloat("stat", value));
+    }
+    try std.testing.expectError(error.InvalidValue, stats.indicateProgress("achievement", 0, 0));
+    try std.testing.expectError(error.InvalidValue, stats.indicateProgress("achievement", 3, 2));
+}
+
+test "Apps rejects empty output storage and oversized DLC indices before Steam" {
+    var context: Context = undefined;
+    const apps: Apps = .{ .lease = .{ .context = &context, .generation = 0 } };
+    var empty: [0]u8 = .{};
+    try std.testing.expectError(error.BufferTooSmall, apps.dlc(0, &empty));
+    try std.testing.expectError(error.BufferTooSmall, apps.launchCommandLine(&empty));
+    var buffer: [16]u8 = undefined;
+    try std.testing.expectError(error.TooLarge, apps.dlc(@as(usize, std.math.maxInt(i32)) + 1, &buffer));
+}
+
 test "analyze all public service methods" {
     std.testing.refAllDecls(Friends);
     std.testing.refAllDecls(Apps);

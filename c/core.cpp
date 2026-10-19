@@ -71,6 +71,13 @@ int32_t sw_user_license(uint64_t user, uint32_t app) {
 }
 
 namespace {
+#ifdef SW_CORE_TEST
+void identity_text(const SteamNetworkingIdentity &identity, char *buffer, size_t capacity);
+#else
+void identity_text(const SteamNetworkingIdentity &identity, char *buffer, size_t capacity) {
+    identity.ToString(buffer, capacity);
+}
+#endif
 void convert(const SteamServersConnected_t &, SwEvent &e) { e.kind = SW_CONNECTED; }
 void convert(const SteamServersDisconnected_t &v, SwEvent &e) {
     e.kind = SW_DISCONNECTED; e.data.connection.result = enum_value(v.m_eResult);
@@ -147,7 +154,7 @@ void convert(const SteamNetConnectionStatusChangedCallback_t &v, SwEvent &e) {
     info.connection = v.m_hConn; info.listen_socket = v.m_info.m_hListenSocket;
     info.state = enum_value(v.m_info.m_eState); info.end_reason = v.m_info.m_eEndReason;
     info.peer_steam_id = v.m_info.m_identityRemote.GetSteamID64();
-    v.m_info.m_identityRemote.ToString(info.peer_identity, sizeof(info.peer_identity));
+    identity_text(v.m_info.m_identityRemote, info.peer_identity, sizeof(info.peer_identity));
     memcpy(info.end_debug, v.m_info.m_szEndDebug, sizeof(info.end_debug));
     e.data.network.old_state = enum_value(v.m_eOldState);
 }
@@ -289,119 +296,376 @@ uint8_t sw_next_event(int32_t pipe, SwEvent *event) {
 #include <stdlib.h>
 #include <stdio.h>
 namespace {
-void expect(bool condition) { if (!condition) abort(); }
-struct FakeCallbacks {
+const char *test_type = "setup";
+const char *test_case = "setup";
+int test_index = 0;
+int test_variant = 0;
+int test_callback = 0;
+int cases_run = 0;
+void check(bool condition, const char *expression, int line) {
+    if (condition) return;
+    fprintf(stderr, "core.cpp:%d: %s (callback %d) / %s [case %d, variant %d]: %s\n",
+        line, test_type, test_callback, test_case, test_index, test_variant, expression);
+    abort();
+}
+#define expect(condition) check((condition), #condition, __LINE__)
+constexpr int32_t test_pipe = 73;
+constexpr SteamAPICall_t test_call = 0xfedcba9876543210ULL;
+constexpr uint64 test_lobby = 0x123456789abcdef0ULL;
+constexpr uint64 test_user = 0x23456789abcdef01ULL;
+constexpr uint64 test_game = 0x3456789abcdef012ULL;
+constexpr int32_t future_value = 123456;
+
+int identity_calls = 0;
+SteamNetworkingIdentity formatted_identity = {};
+char *identity_buffer = nullptr;
+size_t identity_capacity = 0;
+constexpr char identity_fixture_text[] = "fixture-identity";
+// The SDK method needs a live interface. Only the fixture substitutes formatting;
+// decoding, forwarding, copying and callback release still use the real paths.
+void identity_text(const SteamNetworkingIdentity &identity, char *buffer, size_t capacity) {
+    ++identity_calls;
+    memcpy(&formatted_identity, &identity, sizeof(identity));
+    identity_buffer = buffer; identity_capacity = capacity;
+    expect(buffer != nullptr && capacity >= sizeof(identity_fixture_text));
+    memcpy(buffer, identity_fixture_text, sizeof(identity_fixture_text));
+}
+
+template<class T> struct FakeCallbacks {
     CallbackMsg_t message = {};
     bool available = true;
+    bool outstanding = false;
+    int nexts = 0;
     int frees = 0;
     bool retrieved = true;
     bool io_failed = false;
     int fetches = 0;
-    LobbyCreated_t value = {};
-    bool next(int32_t, CallbackMsg_t *out) {
+    T value = {};
+    bool next(int32_t pipe, CallbackMsg_t *out) {
+        expect(pipe == test_pipe && !outstanding);
+        ++nexts;
         if (!available) return false;
-        available = false; *out = message; return true;
+        available = false; outstanding = true; *out = message; return true;
     }
-    void free(int32_t) { ++frees; }
-    bool result(int32_t, SteamAPICall_t handle, void *out, int size, int id, bool *failed) {
+    void free(int32_t pipe) {
+        expect(pipe == test_pipe && outstanding && frees == 0);
+        outstanding = false; ++frees;
+    }
+    bool result(int32_t pipe, SteamAPICall_t handle, void *out, int size, int id, bool *failed) {
+        expect(pipe == test_pipe && outstanding && frees == 0);
+        expect(handle == test_call && out != nullptr && failed != nullptr);
+        expect(size == sizeof(T) && id == T::k_iCallback && fetches == 0);
         ++fetches;
-        expect(handle == 0xfedcba9876543210ULL);
-        expect(size == sizeof(value) && id == LobbyCreated_t::k_iCallback);
         *failed = io_failed;
         if (retrieved && !io_failed) memcpy(out, &value, sizeof(value));
         return retrieved;
     }
 };
-}
-int main() {
+struct GuardedEvent {
+    uint64_t before = 0x1234fedc9876abcdULL;
     SwEvent event = {};
+    uint64_t after = 0xabcd9876fedc1234ULL;
+    void check_guards() const {
+        expect(before == 0x1234fedc9876abcdULL && after == 0xabcd9876fedc1234ULL);
+    }
+};
+template<class T> void drained(FakeCallbacks<T> &source, GuardedEvent &out, int fetches) {
+    out.check_guards();
+    expect(source.nexts == 1 && source.frees == 1 && !source.outstanding && source.fetches == fetches);
+    unsigned char snapshot[sizeof(SwEvent)];
+    memcpy(snapshot, &out.event, sizeof(snapshot));
+    const int formats = identity_calls;
+    expect(!poll(source, test_pipe, out.event));
+    expect(!poll(source, test_pipe, out.event));
+    expect(identity_calls == formats);
+    expect(source.nexts == 3 && source.frees == 1 && source.fetches == fetches && !source.outstanding);
+    expect(memcmp(snapshot, &out.event, sizeof(snapshot)) == 0);
+    out.check_guards();
+    ++cases_run;
+}
+// Future enum representations are copied, never evaluated as native enums.
+template<class T> void future_enum(T &value) {
+    static_assert(sizeof(value) == sizeof(future_value), "SDK enum width changed");
+    memcpy(&value, &future_value, sizeof(value));
+}
+void verify_result(const LobbyCreated_t &v, const SwEvent &e) {
+    expect(e.kind == SW_LOBBY_CREATED && e.data.lobby_created.lobby == v.m_ulSteamIDLobby);
+    expect(e.data.lobby_created.result == enum_value(v.m_eResult));
+}
+void verify_result(const LobbyEnter_t &v, const SwEvent &e) {
+    expect(e.kind == SW_LOBBY_ENTERED && e.data.lobby_entered.lobby == v.m_ulSteamIDLobby);
+    expect(e.data.lobby_entered.response == v.m_EChatRoomEnterResponse && e.data.lobby_entered.locked == v.m_bLocked);
+}
+void verify_result(const LobbyMatchList_t &v, const SwEvent &e) {
+    expect(e.kind == SW_LOBBY_LIST && e.data.lobby_list.count == v.m_nLobbiesMatching);
+}
+void verify_result(const UserStatsReceived_t &v, const SwEvent &e) {
+    expect(e.kind == SW_STATS_RECEIVED && e.data.stats.game == v.m_nGameID);
+    expect(e.data.stats.user == v.m_steamIDUser.ConvertToUint64() && e.data.stats.result == enum_value(v.m_eResult));
+}
+void verify_result(const RemoteStorageFileWriteAsyncComplete_t &v, const SwEvent &e) {
+    expect(e.kind == SW_CLOUD_WRITTEN && e.data.cloud.result == enum_value(v.m_eResult));
+}
+
+template<class T> void completion_cases(const char *name, const T &value) {
+    test_type = name; test_callback = T::k_iCallback; test_variant = 0;
+    const char *modes[] = {"copy", "unavailable", "io-failure", "unavailable-and-io-failure",
+        "inner-zero", "inner-short", "inner-long", "inner-max",
+        "outer-negative", "outer-zero", "outer-short", "outer-long", "outer-null", "outer-unaligned"};
+    for (int mode = 0; mode != 14; ++mode) {
+        test_case = modes[mode]; test_index = mode;
+        SteamAPICallCompleted_t call = {};
+        call.m_hAsyncCall = test_call; call.m_iCallback = T::k_iCallback; call.m_cubParam = sizeof(T);
+        if (mode == 4) call.m_cubParam = 0;
+        if (mode == 5) --call.m_cubParam;
+        if (mode == 6) ++call.m_cubParam;
+        if (mode == 7) call.m_cubParam = UINT32_MAX;
+        alignas(SteamAPICallCompleted_t) unsigned char bytes[sizeof(call) + 1];
+        memcpy(bytes + 1, &call, sizeof(call));
+        FakeCallbacks<T> source;
+        memcpy(&source.value, &value, sizeof(value));
+        source.retrieved = mode != 1 && mode != 3;
+        source.io_failed = mode == 2 || mode == 3;
+        source.message = {0, SteamAPICallCompleted_t::k_iCallback, reinterpret_cast<uint8_t *>(&call), sizeof(call)};
+        if (mode == 8) source.message.m_cubParam = -1;
+        if (mode == 9) source.message.m_cubParam = 0;
+        if (mode == 10) --source.message.m_cubParam;
+        if (mode == 11) ++source.message.m_cubParam;
+        if (mode == 12) source.message.m_pubParam = nullptr;
+        if (mode == 13) source.message.m_pubParam = bytes + 1;
+        GuardedEvent out;
+        out.event.call = 1; out.event.callback_id = -1;
+        expect(poll(source, test_pipe, out.event));
+        const bool outer_bad = mode >= 8 && mode <= 12;
+        expect(out.event.call == (outer_bad ? 0 : test_call));
+        expect(out.event.callback_id == (outer_bad ? SteamAPICallCompleted_t::k_iCallback : T::k_iCallback));
+        if (mode == 0 || mode == 13) {
+            // Overwrite the retrieval source and outer bytes before inspecting the owned result.
+            const T replacement = {};
+            memcpy(&source.value, &replacement, sizeof(replacement));
+            memset(bytes, 0, sizeof(bytes)); call = {};
+            verify_result(value, out.event);
+        } else if (mode == 1 || mode == 3) {
+            expect(out.event.kind == SW_CALL_FAILED && out.event.data.call_failure.reason == SW_RESULT_UNAVAILABLE);
+        } else if (mode == 2) {
+            expect(out.event.kind == SW_CALL_FAILED && out.event.data.call_failure.reason == SW_IO_FAILURE);
+        } else expect(out.event.kind == SW_MALFORMED);
+        drained(source, out, mode < 4 || mode == 13 ? 1 : 0);
+    }
+}
+
+// The storage is real and at least sizeof(T)+1 bytes; only bytes copied from
+// initialized SDK objects are decoded. Empty SDK structs have alignment one.
+template<class T, class Verify> void broadcast_cases(const char *name, const T &value, int kind, Verify verify) {
+    test_type = name; test_callback = T::k_iCallback; test_case = "broadcast-size/storage";
+    const int sizes[] = {-1, 0, int(sizeof(T)) - 1, int(sizeof(T)), int(sizeof(T)) + 1};
+    for (int size_index = 0; size_index != 5; ++size_index) {
+        for (int storage = 0; storage != 3; ++storage) {
+            test_index = size_index * 3 + storage;
+            alignas(T) unsigned char bytes[sizeof(T) + 1] = {};
+            const int offset = storage == 2 ? 1 : 0;
+            memcpy(bytes + offset, &value, sizeof(value));
+            FakeCallbacks<T> source;
+            source.message = {0, T::k_iCallback, storage == 0 ? nullptr : bytes + offset, sizes[size_index]};
+            GuardedEvent out;
+            out.event.call = test_call; out.event.kind = SW_CALL_FAILED;
+            identity_calls = 0;
+            expect(poll(source, test_pipe, out.event));
+            const bool formats = T::k_iCallback == SteamNetConnectionStatusChangedCallback_t::k_iCallback &&
+                sizes[size_index] == sizeof(T) && storage != 0;
+            expect(identity_calls == (formats ? 1 : 0));
+            if (formats) {
+                expect(formatted_identity.GetSteamID64() == test_user);
+                expect(identity_buffer == out.event.data.network.info.peer_identity);
+                expect(identity_capacity == sizeof(out.event.data.network.info.peer_identity));
+            }
+            memset(bytes, 0xa5, sizeof(bytes));
+            expect(out.event.call == 0 && out.event.callback_id == T::k_iCallback);
+            if (sizes[size_index] == sizeof(T) && storage != 0) {
+                expect(out.event.kind == kind);
+                verify(out.event);
+            } else expect(out.event.kind == SW_MALFORMED);
+            drained(source, out, 0);
+        }
+    }
+}
+#define broadcast(value, kind, ...) broadcast_cases(#value, value, kind, [&](const SwEvent &e) { __VA_ARGS__; })
+
+void test_completions() {
     LobbyCreated_t created = {};
-    created.m_eResult = k_EResultOK; created.m_ulSteamIDLobby = 0x123456789abcdef0ULL;
-    uint8_t unaligned[sizeof(created) + 1] = {};
-    memcpy(unaligned + 1, &created, sizeof(created));
-    FakeCallbacks normal;
-    normal.message.m_iCallback = LobbyCreated_t::k_iCallback;
-    normal.message.m_pubParam = unaligned + 1; normal.message.m_cubParam = sizeof(created);
-    expect(poll(normal, 1, event));
-    expect(event.kind == SW_LOBBY_CREATED && event.data.lobby_created.lobby == created.m_ulSteamIDLobby);
-    expect(event.call == 0 && normal.frees == 1 && !poll(normal, 1, event));
-    expect(normal.frees == 1);
-    FakeCallbacks malformed;
-    malformed.message = normal.message; --malformed.message.m_cubParam;
-    expect(poll(malformed, 1, event) && event.kind == SW_MALFORMED && malformed.frees == 1);
-    FakeCallbacks unknown;
-    unknown.message.m_iCallback = 999999;
-    expect(poll(unknown, 1, event) && event.kind == SW_UNHANDLED && unknown.frees == 1);
-    SteamAPICallCompleted_t completed = {};
-    completed.m_hAsyncCall = 0xfedcba9876543210ULL;
-    completed.m_iCallback = LobbyCreated_t::k_iCallback; completed.m_cubParam = sizeof(created);
-    for (int mode = 0; mode != 4; ++mode) {
-        FakeCallbacks source;
-        source.message.m_iCallback = SteamAPICallCompleted_t::k_iCallback;
-        source.message.m_pubParam = reinterpret_cast<uint8_t *>(&completed);
-        source.message.m_cubParam = sizeof(completed);
-        source.value = created;
-        source.retrieved = mode != 1; source.io_failed = mode == 2;
-        if (mode == 3) ++completed.m_cubParam;
-        expect(poll(source, 1, event) && source.frees == 1 && event.call == completed.m_hAsyncCall);
-        if (mode == 0) expect(event.kind == SW_LOBBY_CREATED && event.data.lobby_created.result == k_EResultOK);
-        if (mode == 1) expect(event.kind == SW_CALL_FAILED && event.data.call_failure.reason == SW_RESULT_UNAVAILABLE);
-        if (mode == 2) expect(event.kind == SW_CALL_FAILED && event.data.call_failure.reason == SW_IO_FAILURE);
-        if (mode == 3) expect(event.kind == SW_MALFORMED && source.fetches == 0);
+    created.m_eResult = k_EResultOK; created.m_ulSteamIDLobby = test_lobby;
+    completion_cases("LobbyCreated_t/success", created);
+    created.m_eResult = k_EResultAccessDenied; created.m_ulSteamIDLobby = 0;
+    completion_cases("LobbyCreated_t/operation-failure", created);
+    future_enum(created.m_eResult);
+    completion_cases("LobbyCreated_t/unknown-result", created);
+    LobbyEnter_t entered = {};
+    entered.m_ulSteamIDLobby = test_lobby; entered.m_bLocked = true;
+    entered.m_EChatRoomEnterResponse = k_EChatRoomEnterResponseSuccess;
+    completion_cases("LobbyEnter_t/success", entered);
+    entered.m_bLocked = false; entered.m_EChatRoomEnterResponse = k_EChatRoomEnterResponseBanned;
+    completion_cases("LobbyEnter_t/operation-failure", entered);
+    entered.m_EChatRoomEnterResponse = 0xfedcba98U; // SDK field is uint32, not an enum object.
+    completion_cases("LobbyEnter_t/unknown-response", entered);
+    LobbyMatchList_t list = {};
+    list.m_nLobbiesMatching = 0x87654321U;
+    completion_cases("LobbyMatchList_t/nonempty", list);
+    list.m_nLobbiesMatching = 0;
+    completion_cases("LobbyMatchList_t/empty", list); // No operation result field exists.
+    UserStatsReceived_t stats = {};
+    stats.m_nGameID = test_game; stats.m_steamIDUser = CSteamID(test_user); stats.m_eResult = k_EResultOK;
+    completion_cases("UserStatsReceived_t/success", stats);
+    stats.m_eResult = k_EResultFail;
+    completion_cases("UserStatsReceived_t/operation-failure", stats);
+    future_enum(stats.m_eResult);
+    completion_cases("UserStatsReceived_t/unknown-result", stats);
+    RemoteStorageFileWriteAsyncComplete_t written = {};
+    written.m_eResult = k_EResultOK;
+    completion_cases("RemoteStorageFileWriteAsyncComplete_t/success", written);
+    written.m_eResult = k_EResultDiskFull;
+    completion_cases("RemoteStorageFileWriteAsyncComplete_t/operation-failure", written);
+    future_enum(written.m_eResult);
+    completion_cases("RemoteStorageFileWriteAsyncComplete_t/unknown-result", written);
+}
+
+void test_unknown_callbacks() {
+    test_type = "unknown callback"; test_callback = 999999; test_variant = 0;
+    for (int correlated = 0; correlated != 2; ++correlated) {
+        test_case = "no fetch"; test_index = correlated;
+        SteamAPICallCompleted_t call = {};
+        call.m_hAsyncCall = test_call; call.m_iCallback = 999999; call.m_cubParam = UINT32_MAX;
+        FakeCallbacks<LobbyCreated_t> source;
+        source.message = {0, correlated ? SteamAPICallCompleted_t::k_iCallback : call.m_iCallback,
+            correlated ? reinterpret_cast<uint8_t *>(&call) : nullptr, correlated ? int(sizeof(call)) : -1};
+        GuardedEvent out;
+        expect(poll(source, test_pipe, out.event));
+        expect(out.event.kind == SW_UNHANDLED && out.event.callback_id == 999999);
+        expect(out.event.call == (correlated ? test_call : 0));
+        drained(source, out, 0);
+    }
+}
+
+void test_broadcasts() {
+    SteamServersConnected_t connected = {};
+    broadcast(connected, SW_CONNECTED, (void)e);
+    SteamServersDisconnected_t disconnected = {};
+    future_enum(disconnected.m_eResult);
+    broadcast(disconnected, SW_DISCONNECTED, expect(e.data.connection.result == future_value));
+    SteamServerConnectFailure_t failure = {};
+    failure.m_eResult = k_EResultNoConnection; failure.m_bStillRetrying = true;
+    broadcast(failure, SW_CONNECT_FAILURE, expect(e.data.connection.result == k_EResultNoConnection && e.data.connection.retrying == 1));
+    SteamShutdown_t shutdown = {};
+    broadcast(shutdown, SW_SHUTDOWN, (void)e);
+    GameOverlayActivated_t overlay = {};
+    overlay.m_bActive = 1; overlay.m_bUserInitiated = true; overlay.m_nAppID = 480;
+    broadcast(overlay, SW_OVERLAY, expect(e.data.overlay.active == 1 && e.data.overlay.user_initiated == 1 && e.data.overlay.app == 480));
+    DlcInstalled_t dlc = {}; dlc.m_nAppID = 481;
+    broadcast(dlc, SW_DLC_INSTALLED, expect(e.data.dlc.app == 481));
+    PersonaStateChange_t persona = {}; persona.m_ulSteamID = test_user; persona.m_nChangeFlags = 0x40000001;
+    broadcast(persona, SW_PERSONA_CHANGED, expect(e.data.persona.user == test_user && e.data.persona.flags == 0x40000001));
+    AvatarImageLoaded_t avatar = {};
+    avatar.m_steamID = CSteamID(test_user); avatar.m_iImage = 17; avatar.m_iWide = 10; avatar.m_iTall = 20;
+    broadcast(avatar, SW_AVATAR_LOADED, expect(e.data.avatar.user == test_user && e.data.avatar.image == 17 && e.data.avatar.width == 10 && e.data.avatar.height == 20));
+    avatar.m_iWide = -1;
+    broadcast(avatar, SW_MALFORMED, (void)e);
+    avatar.m_iWide = 10; avatar.m_iTall = -1;
+    broadcast(avatar, SW_MALFORMED, (void)e);
+    FriendRichPresenceUpdate_t presence = {}; presence.m_steamIDFriend = CSteamID(test_user); presence.m_nAppID = 480;
+    broadcast(presence, SW_PRESENCE_CHANGED, expect(e.data.presence.user == test_user && e.data.presence.app == 480));
+    GameLobbyJoinRequested_t join = {}; join.m_steamIDLobby = CSteamID(test_lobby); join.m_steamIDFriend = CSteamID(test_user);
+    broadcast(join, SW_LOBBY_JOIN_REQUESTED, expect(e.data.lobby_invite.lobby == test_lobby && e.data.lobby_invite.user == test_user));
+    LobbyInvite_t invite = {}; invite.m_ulSteamIDLobby = test_lobby; invite.m_ulSteamIDUser = test_user; invite.m_ulGameID = test_game;
+    broadcast(invite, SW_LOBBY_INVITE, expect(e.data.lobby_invite.lobby == test_lobby && e.data.lobby_invite.user == test_user && e.data.lobby_invite.game == test_game));
+    LobbyCreated_t created = {}; created.m_ulSteamIDLobby = test_lobby; created.m_eResult = k_EResultOK;
+    broadcast(created, SW_LOBBY_CREATED, verify_result(created, e));
+    LobbyEnter_t entered = {}; entered.m_ulSteamIDLobby = test_lobby; entered.m_bLocked = true; entered.m_EChatRoomEnterResponse = k_EChatRoomEnterResponseSuccess;
+    broadcast(entered, SW_LOBBY_ENTERED, verify_result(entered, e));
+    LobbyMatchList_t list = {}; list.m_nLobbiesMatching = 91;
+    broadcast(list, SW_LOBBY_LIST, verify_result(list, e));
+    LobbyDataUpdate_t data = {}; data.m_ulSteamIDLobby = test_lobby; data.m_ulSteamIDMember = test_user; data.m_bSuccess = 1;
+    broadcast(data, SW_LOBBY_DATA, expect(e.data.lobby_data.lobby == test_lobby && e.data.lobby_data.member == test_user && e.data.lobby_data.success == 1));
+    LobbyChatUpdate_t members = {}; members.m_ulSteamIDLobby = test_lobby; members.m_ulSteamIDUserChanged = test_user; members.m_ulSteamIDMakingChange = test_game; members.m_rgfChatMemberStateChange = 0x80000002U;
+    broadcast(members, SW_LOBBY_MEMBERS, expect(e.data.lobby_members.lobby == test_lobby && e.data.lobby_members.member == test_user && e.data.lobby_members.actor == test_game && e.data.lobby_members.changes == 0x80000002U));
+    LobbyChatMsg_t chat = {}; chat.m_ulSteamIDLobby = test_lobby; chat.m_ulSteamIDUser = test_user; chat.m_iChatID = 0x87654321U; chat.m_eChatEntryType = 255;
+    broadcast(chat, SW_LOBBY_CHAT, expect(e.data.lobby_chat.lobby == test_lobby && e.data.lobby_chat.user == test_user && e.data.lobby_chat.chat_id == 0x87654321U && e.data.lobby_chat.entry_type == 255));
+    LobbyKicked_t kicked = {}; kicked.m_ulSteamIDLobby = test_lobby; kicked.m_ulSteamIDAdmin = test_user; kicked.m_bKickedDueToDisconnect = 1;
+    broadcast(kicked, SW_LOBBY_KICKED, expect(e.data.lobby_kicked.lobby == test_lobby && e.data.lobby_kicked.actor == test_user && e.data.lobby_kicked.disconnected == 1));
+    LobbyGameCreated_t game = {}; game.m_ulSteamIDLobby = test_lobby; game.m_ulSteamIDGameServer = test_user; game.m_unIP = 0x7f000001; game.m_usPort = 27015;
+    broadcast(game, SW_LOBBY_GAME_CREATED, expect(e.data.lobby_game.lobby == test_lobby && e.data.lobby_game.server == test_user && e.data.lobby_game.ipv4 == 0x7f000001 && e.data.lobby_game.port == 27015));
+    GetAuthSessionTicketResponse_t auth_ticket = {}; auth_ticket.m_hAuthTicket = 0x87654321U; future_enum(auth_ticket.m_eResult);
+    broadcast(auth_ticket, SW_AUTH_TICKET, expect(e.data.auth_ticket.ticket == 0x87654321U && e.data.auth_ticket.result == future_value));
+    ValidateAuthTicketResponse_t auth = {}; auth.m_SteamID = CSteamID(test_user); auth.m_OwnerSteamID = CSteamID(test_lobby);
+    static_assert(k_EAuthSessionResponseAuthTicketNetworkIdentityFailure == 10, "auth response mapping changed");
+    auth.m_eAuthSessionResponse = k_EAuthSessionResponseAuthTicketNetworkIdentityFailure;
+    broadcast(auth, SW_AUTH_VALIDATED, expect(e.data.auth_validated.user == test_user && e.data.auth_validated.owner == test_lobby && e.data.auth_validated.response == 10));
+    future_enum(auth.m_eAuthSessionResponse);
+    broadcast(auth, SW_AUTH_VALIDATED, expect(e.data.auth_validated.user == test_user && e.data.auth_validated.owner == test_lobby && e.data.auth_validated.response == future_value));
+    UserStatsReceived_t stats = {}; stats.m_nGameID = test_game; stats.m_steamIDUser = CSteamID(test_user); future_enum(stats.m_eResult);
+    broadcast(stats, SW_STATS_RECEIVED, verify_result(stats, e));
+    UserStatsStored_t stored = {}; stored.m_nGameID = test_game; future_enum(stored.m_eResult);
+    broadcast(stored, SW_STATS_STORED, expect(e.data.stats.game == test_game && e.data.stats.result == future_value));
+    UserStatsUnloaded_t unloaded = {}; unloaded.m_steamIDUser = CSteamID(test_user);
+    broadcast(unloaded, SW_STATS_UNLOADED, expect(e.data.stats.user == test_user));
+    RemoteStorageFileWriteAsyncComplete_t written = {}; future_enum(written.m_eResult);
+    broadcast(written, SW_CLOUD_WRITTEN, verify_result(written, e));
+}
+
+// Empty, embedded-NUL, final-NUL, and unterminated fixed buffers all copy
+// exactly their capacity; the bridge does not promise NUL termination here.
+template<size_t N> void text_pattern(char (&text)[N], int pattern) {
+    for (size_t i = 0; i != N; ++i) text[i] = char('a' + i % 26);
+    if (pattern == 0) memset(text, 0, N);
+    if (pattern == 1) text[N / 2] = 0;
+    if (pattern == 2) text[N - 1] = 0;
+}
+void test_text_and_ticket_bounds() {
+    for (int pattern = 0; pattern != 4; ++pattern) {
+        test_variant = pattern;
+        GameRichPresenceJoinRequested_t game_join = {}; game_join.m_steamIDFriend = CSteamID(test_user);
+        text_pattern(game_join.m_rgchConnect, pattern);
+        broadcast(game_join, SW_GAME_JOIN_REQUESTED, expect(e.data.game_join.user == test_user); expect(memcmp(e.data.game_join.connect, game_join.m_rgchConnect, sizeof(game_join.m_rgchConnect)) == 0));
+        UserAchievementStored_t achievement = {}; achievement.m_nGameID = test_game; achievement.m_bGroupAchievement = true; achievement.m_nCurProgress = 7; achievement.m_nMaxProgress = 19;
+        text_pattern(achievement.m_rgchAchievementName, pattern);
+        broadcast(achievement, SW_ACHIEVEMENT_STORED, expect(e.data.achievement.game == test_game && e.data.achievement.group == 1 && e.data.achievement.current == 7 && e.data.achievement.maximum == 19); expect(memcmp(e.data.achievement.name, achievement.m_rgchAchievementName, sizeof(achievement.m_rgchAchievementName)) == 0));
+        SteamRelayNetworkStatus_t relay = {}; future_enum(relay.m_eAvail); relay.m_bPingMeasurementInProgress = 1;
+        text_pattern(relay.m_debugMsg, pattern);
+        broadcast(relay, SW_RELAY_STATUS, expect(e.data.relay.availability == future_value && e.data.relay.measuring == 1); expect(memcmp(e.data.relay.debug, relay.m_debugMsg, sizeof(relay.m_debugMsg)) == 0));
+        SteamNetConnectionStatusChangedCallback_t network = {};
+        network.m_hConn = 31; network.m_info.m_hListenSocket = 57; network.m_info.m_eEndReason = 1001;
+        network.m_info.m_identityRemote.Clear(); network.m_info.m_identityRemote.SetSteamID64(test_user);
+        future_enum(network.m_info.m_eState); future_enum(network.m_eOldState);
+        text_pattern(network.m_info.m_szEndDebug, pattern);
+        broadcast(network, SW_CONNECTION_CHANGED,
+            expect(e.data.network.info.connection == 31 && e.data.network.info.listen_socket == 57 && e.data.network.info.end_reason == 1001);
+            expect(e.data.network.info.state == future_value && e.data.network.old_state == future_value && e.data.network.info.peer_steam_id == test_user);
+            expect(memchr(e.data.network.info.peer_identity, 0, sizeof(e.data.network.info.peer_identity)) != nullptr);
+            expect(strcmp(e.data.network.info.peer_identity, identity_fixture_text) == 0);
+            expect(memcmp(e.data.network.info.end_debug, network.m_info.m_szEndDebug, sizeof(network.m_info.m_szEndDebug)) == 0));
     }
     GetTicketForWebApiResponse_t ticket = {};
-    ticket.m_cubTicket = -1; convert(ticket, event); expect(event.kind == SW_MALFORMED);
-    ticket.m_cubTicket = sizeof(ticket.m_rgubTicket) + 1; convert(ticket, event); expect(event.kind == SW_MALFORMED);
-    const int32_t future_value = 123456;
-    memcpy(&created.m_eResult, &future_value, sizeof(future_value));
-    convert(created, event); expect(event.data.lobby_created.result == future_value);
-    static_assert(k_EAuthSessionResponseAuthTicketNetworkIdentityFailure == 10, "auth response mapping changed");
-    ValidateAuthTicketResponse_t auth = {};
-    auth.m_SteamID = CSteamID(uint64(23)); auth.m_OwnerSteamID = CSteamID(uint64(99));
-    auth.m_eAuthSessionResponse = k_EAuthSessionResponseAuthTicketNetworkIdentityFailure;
-    FakeCallbacks auth_source;
-    auth_source.message = {0, ValidateAuthTicketResponse_t::k_iCallback, reinterpret_cast<uint8_t *>(&auth), sizeof(auth)};
-    expect(poll(auth_source, 1, event) && auth_source.frees == 1 && event.call == 0);
-    expect(event.kind == SW_AUTH_VALIDATED && event.callback_id == ValidateAuthTicketResponse_t::k_iCallback);
-    expect(event.data.auth_validated.response == 10 && event.data.auth_validated.user == 23 && event.data.auth_validated.owner == 99);
-    auth.m_SteamID = CSteamID(uint64(42)); auth.m_OwnerSteamID = CSteamID(uint64(43));
-    expect(event.data.auth_validated.user == 23 && event.data.auth_validated.owner == 99);
-    memcpy(&auth.m_eAuthSessionResponse, &future_value, sizeof(future_value));
-    convert(auth, event); expect(event.data.auth_validated.response == future_value);
-    // Synthetic identity with nonzero high bits verifies the full SteamId survives copying.
-    const uint64 unloaded_user = 0x123456789abcdef0ULL;
-    UserStatsUnloaded_t unloaded = {};
-    unloaded.m_steamIDUser = CSteamID(unloaded_user);
-    uint8_t unloaded_bytes[sizeof(unloaded) + 1] = {};
-    for (int mode = 0; mode != 5; ++mode) {
-        memcpy(unloaded_bytes + 1, &unloaded, sizeof(unloaded));
-        FakeCallbacks source;
-        source.message = {0, UserStatsUnloaded_t::k_iCallback, unloaded_bytes + 1, sizeof(unloaded)};
-        if (mode == 1) --source.message.m_cubParam;
-        if (mode == 2) ++source.message.m_cubParam;
-        if (mode == 3) source.message.m_pubParam = nullptr;
-        if (mode == 4) source.message.m_cubParam = -1;
-        event.call = 123; // A broadcast must clear any previous correlated result.
-        expect(poll(source, 1, event) && source.frees == 1 && source.fetches == 0);
-        expect(event.call == 0 && event.callback_id == UserStatsUnloaded_t::k_iCallback);
-        memset(unloaded_bytes, 0, sizeof(unloaded_bytes));
-        if (mode == 0) expect(event.kind == SW_STATS_UNLOADED && event.data.stats.user == unloaded_user);
-        else expect(event.kind == SW_MALFORMED);
-        expect(!poll(source, 1, event) && source.frees == 1);
+    ticket.m_hAuthTicket = 0x87654321U; future_enum(ticket.m_eResult);
+    for (size_t i = 0; i != sizeof(ticket.m_rgubTicket); ++i) ticket.m_rgubTicket[i] = uint8_t(i * 37 + 11);
+    const int lengths[] = {-1, 0, 1, int(sizeof(ticket.m_rgubTicket)) - 1, int(sizeof(ticket.m_rgubTicket)), int(sizeof(ticket.m_rgubTicket)) + 1};
+    for (int length : lengths) {
+        test_variant = length;
+        ticket.m_cubTicket = length;
+        const bool valid = length >= 0 && size_t(length) <= sizeof(ticket.m_rgubTicket);
+        broadcast(ticket, valid ? SW_WEB_TICKET : SW_MALFORMED,
+            if (valid) {
+                expect(e.data.web_ticket.ticket == 0x87654321U && e.data.web_ticket.result == future_value && e.data.web_ticket.size == uint32_t(length));
+                expect(memcmp(e.data.web_ticket.bytes, ticket.m_rgubTicket, size_t(length)) == 0);
+                for (size_t i = size_t(length); i != sizeof(e.data.web_ticket.bytes); ++i) expect(e.data.web_ticket.bytes[i] == 0);
+            });
     }
-    AvatarImageLoaded_t avatar = {};
-    avatar.m_steamID = CSteamID(uint64(99)); avatar.m_iImage = 17; avatar.m_iWide = 10; avatar.m_iTall = 20;
-    FakeCallbacks avatar_source;
-    avatar_source.message = {0, AvatarImageLoaded_t::k_iCallback, reinterpret_cast<uint8_t *>(&avatar), sizeof(avatar)};
-    expect(poll(avatar_source, 1, event) && event.kind == SW_AVATAR_LOADED && avatar_source.frees == 1);
-    expect(event.data.avatar.user == 99 && event.data.avatar.image == 17 && event.data.avatar.width == 10 && event.data.avatar.height == 20);
-    avatar.m_iWide = -1; convert(avatar, event); expect(event.kind == SW_MALFORMED);
-    LobbyGameCreated_t game = {};
-    game.m_ulSteamIDLobby = 23; game.m_ulSteamIDGameServer = 99; game.m_unIP = 0x7f000001; game.m_usPort = 27015;
-    FakeCallbacks game_source;
-    game_source.message = {0, LobbyGameCreated_t::k_iCallback, reinterpret_cast<uint8_t *>(&game), sizeof(game)};
-    expect(poll(game_source, 1, event) && event.kind == SW_LOBBY_GAME_CREATED && game_source.frees == 1);
-    expect(event.data.lobby_game.lobby == 23 && event.data.lobby_game.server == 99 && event.data.lobby_game.ipv4 == 0x7f000001 && event.data.lobby_game.port == 27015);
-    puts("Steamworks callback fixtures passed");
+}
+#undef broadcast
+#undef expect
+} // namespace
+int main() {
+    test_completions();
+    test_unknown_callbacks();
+    test_broadcasts();
+    test_text_and_ticket_bounds();
+    printf("Steamworks callback fixtures passed (%d bounded poll cases)\n", cases_run);
 }
 #endif

@@ -23,6 +23,10 @@ pub fn build(b: *std.Build) void {
     configureModule(b, module, sdk_path, runtime);
     module.addCSourceFiles(.{ .files = sources, .flags = cpp_flags });
 
+    const normal_options = b.addOptions();
+    normal_options.addOption(bool, "fatal_lifecycle", false);
+    module.addOptions("steamworkz_test_options", normal_options);
+
     const tests = b.addTest(.{ .name = "steamworkz-tests", .root_module = module, .use_llvm = use_llvm, .use_lld = use_llvm });
     const compile_tests = b.step("test-compile", "Compile and link all offline tests without running them");
     compile_tests.dependOn(&tests.step);
@@ -34,14 +38,60 @@ pub fn build(b: *std.Build) void {
     compile_tests.dependOn(consumer_tests);
     test_step.dependOn(consumer_tests);
 
+    const lifecycle = b.step("test-lifecycle", "Run lifecycle control, runner self-test and five public fatal guards");
+    test_step.dependOn(lifecycle);
+    const runner = b.addExecutable(.{
+        .name = "steamworkz-lifecycle-runner",
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/lifecycle_runner.zig"), .target = target, .optimize = optimize, .link_libc = true }),
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
+    });
+    compile_tests.dependOn(&runner.step);
+    const self_test = b.addRunArtifact(runner);
+    self_test.addArg("self-test");
+    configureRun(b, self_test, target.result, sdk_path);
+    lifecycle.dependOn(&self_test.step);
+    for ([_][]const u8{ "wrong-thread", "moved-client", "stale-lease", "outstanding-message", "released-message" }) |name| {
+        const fatal_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+        configureModule(b, fatal_module, sdk_path, runtime);
+        fatal_module.addCSourceFiles(.{ .files = sources, .flags = cpp_flags });
+        const options = b.addOptions();
+        options.addOption(bool, "fatal_lifecycle", true);
+        fatal_module.addOptions("steamworkz_test_options", options);
+        const fatal = b.addTest(.{ .name = b.fmt("fatal-{s}", .{name}), .root_module = fatal_module, .filters = &.{b.fmt("lifecycle fatal {s}", .{name})}, .use_llvm = use_llvm, .use_lld = use_llvm });
+        compile_tests.dependOn(&fatal.step);
+        // The runner launches these directly, without the build test-server protocol.
+        const check = b.addRunArtifact(runner);
+        check.addArgs(&.{ "check", name });
+        check.addArtifactArg(fatal);
+        configureRun(b, check, target.result, sdk_path);
+        lifecycle.dependOn(&check.step);
+    }
+    const control = b.addTest(.{ .name = "lifecycle-control", .root_module = module, .filters = &.{"lifecycle control "}, .use_llvm = use_llvm, .use_lld = use_llvm });
+    const control_run = b.addRunArtifact(control);
+    configureRun(b, control_run, target.result, sdk_path);
+    lifecycle.dependOn(&control_run.step);
+    compile_tests.dependOn(&control.step);
+    const properties = b.addTest(.{ .name = "properties", .root_module = module, .filters = &.{"property "}, .use_llvm = use_llvm, .use_lld = use_llvm });
+    const properties_run = b.addRunArtifact(properties);
+    configureRun(b, properties_run, target.result, sdk_path);
+    b.step("test-properties", "Run deterministic bounded Zig properties").dependOn(&properties_run.step);
+    compile_tests.dependOn(&properties.step);
+    // Properties already run in the ordinary unfiltered suite.
+
     const fixtures = [_]struct { name: []const u8, source: []const u8, define: []const u8 }{
         .{ .name = "core", .source = "c/core.cpp", .define = "SW_CORE_TEST" },
         .{ .name = "networking", .source = "c/networking.cpp", .define = "SW_NETWORKING_TEST" },
         .{ .name = "lobbies", .source = "c/lobbies.cpp", .define = "SW_LOBBIES_TEST" },
+        .{ .name = "services", .source = "c/services.cpp", .define = "SW_SERVICES_TEST" },
     };
     for (fixtures) |fixture| {
         const fixture_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
-        configureModule(b, fixture_module, sdk_path, runtime);
+        // Services substitutes every SDK invocation: missed substitutions must fail to link.
+        if (std.mem.eql(u8, fixture.name, "services"))
+            configureIncludes(b, fixture_module, sdk_path)
+        else
+            configureModule(b, fixture_module, sdk_path, runtime);
         fixture_module.addCMacro(fixture.define, "1");
         fixture_module.addCSourceFile(.{ .file = b.path(fixture.source), .flags = cpp_flags });
         const executable = b.addExecutable(.{
@@ -54,6 +104,7 @@ pub fn build(b: *std.Build) void {
         const run = b.addRunArtifact(executable);
         configureRun(b, run, target.result, sdk_path);
         test_step.dependOn(&run.step);
+        b.step(b.fmt("test-{s}", .{fixture.name}), b.fmt("Run offline {s} native fixtures", .{fixture.name})).dependOn(&run.step);
     }
 
     const smoke_module = b.createModule(.{ .root_source_file = b.path("examples/smoke.zig"), .target = target, .optimize = optimize });
@@ -71,9 +122,9 @@ pub fn build(b: *std.Build) void {
 }
 
 fn addConsumerTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, sdk: []const u8) *std.Build.Step {
-    // Build a separate project through the public dependency recipe. Only its
-    // install step executes: neither package tests nor target binaries recurse.
-    const run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "install", "--build-file" });
+    // Build a separate project through the public dependency recipe. Only
+    // installation and compile-fail probes run, never package tests or target binaries.
+    const run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "install", "check-negative", "--build-file" });
     run.addFileArg(b.path("tests/consumer/build.zig"));
     run.addArgs(&.{ "--cache-dir", b.pathFromRoot(b.cache_root.path orelse ".") });
     run.addArgs(&.{ "--global-cache-dir", b.graph.global_cache_root.path orelse "." });
@@ -127,9 +178,13 @@ fn runtimeLibrary(b: *std.Build, target: std.Target, sdk: []const u8) Runtime {
     };
 }
 
-fn configureModule(b: *std.Build, module: *std.Build.Module, sdk: []const u8, runtime: Runtime) void {
+fn configureIncludes(b: *std.Build, module: *std.Build.Module, sdk: []const u8) void {
     module.addIncludePath(b.path("c"));
     module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "public" }) });
+}
+
+fn configureModule(b: *std.Build, module: *std.Build.Module, sdk: []const u8, runtime: Runtime) void {
+    configureIncludes(b, module, sdk);
     module.addLibraryPath(.{ .cwd_relative = runtime.directory });
     module.linkSystemLibrary(runtime.library, .{});
     if (module.resolved_target.?.result.os.tag == .linux) module.addRPathSpecial("$ORIGIN");
