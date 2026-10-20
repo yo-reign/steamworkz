@@ -133,6 +133,81 @@ export fn consumerProgression(client: *steam.Client, board_value: u64, previous:
     std.mem.doNotOptimizeAway(stats.globalPercentage("achievement"));
 }
 
+// M4 linkage probes only. They remain uncalled. In particular, the screenshot
+// probe does not provide a usable pending-storage policy or an application loop.
+export fn consumerVoice(client: *steam.Client, compressed: [*]u8, bytes: usize, pcm: [*]i16, samples: usize) void {
+    const voice = client.voice();
+    std.mem.doNotOptimizeAway(voice.start());
+    std.mem.doNotOptimizeAway(voice.state());
+    std.mem.doNotOptimizeAway(voice.available());
+    std.mem.doNotOptimizeAway(voice.stop());
+    std.mem.doNotOptimizeAway(voice.read(compressed[0..bytes]));
+    std.mem.doNotOptimizeAway(voice.optimalSampleRate());
+    std.mem.doNotOptimizeAway(voice.decode(compressed[0..bytes], pcm[0..samples], 24000));
+}
+export fn consumerRemotePlay(client: *steam.Client, session_value: u32, friend_value: u64) void {
+    const remote = client.remotePlay();
+    const session: steam.RemotePlaySession = @enumFromInt(session_value);
+    std.mem.doNotOptimizeAway(remote.sessionCount());
+    std.mem.doNotOptimizeAway(remote.sessionAt(0));
+    std.mem.doNotOptimizeAway(remote.isTogether(session));
+    std.mem.doNotOptimizeAway(remote.steamId(session));
+    std.mem.doNotOptimizeAway(remote.guestId(session));
+    var name: [1024]u8 = undefined;
+    std.mem.doNotOptimizeAway(remote.clientName(session, &name));
+    std.mem.doNotOptimizeAway(remote.formFactor(session));
+    std.mem.doNotOptimizeAway(remote.resolution(session));
+    std.mem.doNotOptimizeAway(remote.showTogetherUi());
+    std.mem.doNotOptimizeAway(remote.invite(.{ .friend = @enumFromInt(friend_value) }));
+    std.mem.doNotOptimizeAway(remote.invite(.guest));
+}
+export fn consumerTimeline(client: *steam.Client, range: *steam.Timeline.Range, marker_value: u64) void {
+    const timeline = client.timeline();
+    const event: steam.Timeline.Event = .{ .title = "", .description = "", .icon = "", .priority = 0 };
+    std.mem.doNotOptimizeAway(timeline.setMode(.playing));
+    std.mem.doNotOptimizeAway(timeline.setTooltip("", 0));
+    std.mem.doNotOptimizeAway(timeline.clearTooltip(0));
+    std.mem.doNotOptimizeAway(timeline.instant(event, .{}));
+    std.mem.doNotOptimizeAway(timeline.completed(event, .{}));
+    std.mem.doNotOptimizeAway(timeline.remove(@enumFromInt(marker_value)));
+    range.* = timeline.start(event, 0, .none) catch return;
+}
+export fn consumerTimelineRange(range: *const steam.Timeline.Range, finish: bool) void {
+    std.mem.doNotOptimizeAway(range.update(.{ .title = "", .description = "", .icon = "", .priority = .keep_current, .clip = .none }));
+    if (finish) std.mem.doNotOptimizeAway(range.end(0)) else std.mem.doNotOptimizeAway(range.cancel());
+}
+export fn consumerWorkshop(client: *steam.Client, item_value: u64, query: *steam.Workshop.Query) void {
+    const workshop = client.workshop();
+    const item: steam.WorkshopItem = @enumFromInt(item_value);
+    std.mem.doNotOptimizeAway(workshop.subscriptionCount(.{}));
+    var items: [4]steam.WorkshopItem = undefined;
+    std.mem.doNotOptimizeAway(workshop.subscriptions(&items, .{}));
+    std.mem.doNotOptimizeAway(workshop.itemState(item));
+    var path: [1024]u8 = undefined;
+    std.mem.doNotOptimizeAway(workshop.installInfo(item, &path));
+    std.mem.doNotOptimizeAway(workshop.downloadProgress(item));
+    std.mem.doNotOptimizeAway(workshop.downloadItem(item, .{}));
+    query.* = workshop.createDetailsQuery(&.{item}) catch return;
+    std.mem.doNotOptimizeAway(query.send());
+}
+export fn consumerWorkshopQuery(query: *const steam.Workshop.Query, index: u32, out: *steam.Workshop.Details) void {
+    std.mem.doNotOptimizeAway(query.state());
+    std.mem.doNotOptimizeAway(query.handle());
+    std.mem.doNotOptimizeAway(query.resultCount());
+    // A separate export keeps reads reachable after consumerPlatformPoll observes completion.
+    std.mem.doNotOptimizeAway(query.read(index, out));
+    std.mem.doNotOptimizeAway(query.release());
+}
+export fn consumerScreenshots(client: *steam.Client, rgb: [*]u8, bytes: usize, width: i32, height: i32, path: [*:0]const u8, thumbnail: ?[*:0]const u8) void {
+    const screenshots = client.screenshots();
+    std.mem.doNotOptimizeAway(screenshots.submitRgbBorrowed(rgb[0..bytes], width, height));
+    std.mem.doNotOptimizeAway(screenshots.submitFile(std.mem.span(path), if (thumbnail) |value| std.mem.span(value) else null, width, height));
+    std.mem.doNotOptimizeAway(screenshots.isHooked());
+    std.mem.doNotOptimizeAway(screenshots.enableHook());
+    std.mem.doNotOptimizeAway(screenshots.trigger());
+    std.mem.doNotOptimizeAway(screenshots.disableHook());
+}
+
 pub fn main() !void {
     // Taking addresses retains production paths without executing them.
     std.mem.doNotOptimizeAway(&consumerClientLoggedOn);
@@ -144,6 +219,16 @@ pub fn main() !void {
     std.mem.doNotOptimizeAway(&consumerInput);
     std.mem.doNotOptimizeAway(&consumerCloud);
     std.mem.doNotOptimizeAway(&consumerProgression);
+    std.mem.doNotOptimizeAway(&consumerVoice);
+    std.mem.doNotOptimizeAway(&consumerRemotePlay);
+    std.mem.doNotOptimizeAway(&consumerTimeline);
+    std.mem.doNotOptimizeAway(&consumerTimelineRange);
+    std.mem.doNotOptimizeAway(&consumerWorkshop);
+    std.mem.doNotOptimizeAway(&consumerWorkshopQuery);
+    std.mem.doNotOptimizeAway(&consumerScreenshots);
+    const query_identity: steam.WorkshopQuery = @enumFromInt(0);
+    const screenshot_identity: steam.ScreenshotHandle = @enumFromInt(73);
+    if (query_identity == .invalid or @intFromEnum(screenshot_identity) != 73) return error.ValueMismatch;
     const address = try steam.Networking.Address.parse("127.0.0.1:27015");
     var text: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
     defer text.deinit();
@@ -162,7 +247,7 @@ pub fn main() !void {
     const value = (try request.take(&event)) orelse return error.MissingCompletion;
     if (value.result != .access_denied or @intFromEnum(value.lobby) != 123 or request.isPending()) return error.CompletionMismatch;
     if (try request.take(&event) != null) return error.DuplicateCompletion;
-    inline for (.{ .lobby_entered, .lobby_list, .stats_received, .cloud_written, .leaderboard_found, .leaderboard_entries, .leaderboard_uploaded, .global_percentages_ready }) |kind| {
+    inline for (.{ .lobby_entered, .lobby_list, .stats_received, .cloud_written, .leaderboard_found, .leaderboard_entries, .leaderboard_uploaded, .global_percentages_ready, .workshop_query_completed }) |kind| {
         const pending = try steam.Request(kind).init(@enumFromInt(99));
         if (!pending.isPending()) return error.MissingRequest;
     }

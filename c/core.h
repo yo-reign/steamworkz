@@ -21,7 +21,12 @@ enum SwEventKind {
     SW_ACHIEVEMENT_ICON, SW_LEADERBOARD_FOUND, SW_LEADERBOARD_ENTRIES,
     SW_LEADERBOARD_UPLOADED, SW_GLOBAL_PERCENTAGES_READY,
     SW_GAMEPAD_DISMISSED, SW_FLOATING_DISMISSED, SW_RESUMED,
-    SW_CLOUD_CHANGED, SW_INPUT_CONNECTED, SW_INPUT_DISCONNECTED
+    SW_CLOUD_CHANGED, SW_INPUT_CONNECTED, SW_INPUT_DISCONNECTED,
+    SW_WORKSHOP_QUERY_COMPLETED, SW_WORKSHOP_ITEM_INSTALLED,
+    SW_WORKSHOP_DOWNLOADED, SW_WORKSHOP_SUBSCRIPTIONS_CHANGED,
+    SW_REMOTE_PLAY_CONNECTED, SW_REMOTE_PLAY_DISCONNECTED,
+    SW_REMOTE_PLAY_GUEST_INVITE, SW_REMOTE_PLAY_AVATAR_LOADED,
+    SW_SCREENSHOT_READY, SW_SCREENSHOT_REQUESTED
 };
 enum SwCallFailure { SW_RESULT_UNAVAILABLE = 1, SW_IO_FAILURE = 2 };
 
@@ -61,6 +66,14 @@ typedef struct SwEvent {
         struct { uint64_t game; int32_t result; } global_percentages;
         struct { uint32_t app; uint8_t submitted, matched; SwUtilsTextCapture capture; } gamepad;
         struct { uint64_t controller; } input_device;
+        struct { uint64_t query; int32_t result; uint32_t returned, total; uint8_t cached; char cursor[256]; } workshop_query;
+        struct { uint32_t app; uint64_t item, legacy_content, manifest; } workshop_installed;
+        struct { uint32_t app; uint64_t item; int32_t result; } workshop_download;
+        struct { uint32_t app; } workshop_subscriptions;
+        struct { uint32_t session; } remote_session;
+        struct { char url[1024]; } remote_invite;
+        struct { uint32_t session; int32_t image, width, height; } remote_avatar;
+        struct { uint32_t handle; int32_t result; } screenshot;
         struct { int32_t reason; } call_failure;
     } data;
 } SwEvent;

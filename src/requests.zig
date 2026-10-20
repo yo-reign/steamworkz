@@ -11,7 +11,7 @@ pub const Error = error{ ResultUnavailable, IoFailure, MalformedResult, Unexpect
 /// events, own a native resource, or provide native cancellation.
 pub fn Request(comptime kind: std.meta.Tag(Payload)) type {
     switch (kind) {
-        .lobby_created, .lobby_entered, .lobby_list, .stats_received, .cloud_written, .leaderboard_found, .leaderboard_entries, .leaderboard_uploaded, .global_percentages_ready => {},
+        .lobby_created, .lobby_entered, .lobby_list, .stats_received, .cloud_written, .leaderboard_found, .leaderboard_entries, .leaderboard_uploaded, .global_percentages_ready, .workshop_query_completed => {},
         else => @compileError("This event does not complete an exposed API-call request"),
     }
     return struct {
@@ -116,6 +116,7 @@ test "each exposed asynchronous operation has a typed completion" {
         .{ .leaderboard_entries, Payload{ .leaderboard_entries = .{ .leaderboard = @enumFromInt(5), .status = .entry_failed, .reported_count = 7, .failure_index = 0 } } },
         .{ .leaderboard_uploaded, Payload{ .leaderboard_uploaded = .{ .leaderboard = @enumFromInt(11), .success = false, .score = -13, .changed = false, .rank_new = 0, .rank_previous = 0 } } },
         .{ .global_percentages_ready, Payload{ .global_percentages_ready = .{ .game = 17, .result = .fail } } },
+        .{ .workshop_query_completed, Payload{ .workshop_query_completed = .{ .query = @enumFromInt(0), .result = .fail, .returned = 0, .total = 3, .cached = false, .cursor = @splat(0) } } },
     };
     inline for (cases) |case| {
         const T = Request(case[0]);

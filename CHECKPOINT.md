@@ -44,8 +44,13 @@ Recorded 2026-10-19.
 - Accepted M2 commit: `b41b7e4be92c78415c38dc1b98fa69737bbd2a84`, normally pushed and verified equal to remote main.
 - Its actual immutable package hash is `steamworkz-0.1.0-y1J17_I_CAB4GtAGgEIBlZwaWq_eQfR5cHrDEUH_IQq7`.
 - A fresh M2 URL/hash consumer passed build/install, negative probes, production linkage and runtime-byte checks without application execution.
-- M3 source is accepted after integrated checks, independent reviews and a narrow forwarding repair. Its publication gates remain pending at this source checkpoint.
-- M4 and the final game pin remain pending. Source acceptance and publication do not establish native-service or performance readiness.
+- Accepted M3 commit: `24fcb9673532867ffc51e996f5ca87eb2acfa735`, normally pushed and verified equal to remote main.
+- Its actual immutable package hash is `steamworkz-0.1.0-y1J17xtWDABEb_0isyM9YGnqFgyiJegzPDmjJZukLow6`.
+- A fresh M3 URL/hash consumer passed build/install, negative probes, production linkage and runtime-byte checks without application execution.
+- All five M4 component writers delivered handoffs and ended checkout ownership. Parent source, frozen-input, SDK and retained-artifact inspection is complete.
+- Shared M4 integration, aggregate matrices, package/linkage checks and three independent reviews passed. The parent accepted M4 source on 2026-10-20.
+- Final document-inclusive publication checks and the immutable game pin remain separate next gates.
+- Acceptance and publication do not establish native-service or performance readiness.
 - Game implementation remains unchanged at the extraction baseline. Its README and a new migration record are uncommitted.
 - Extraction hashes and private execution logs stay outside the published repositories.
 
@@ -56,9 +61,9 @@ Recorded 2026-10-19.
 | M0: extraction/naming/external SDK | accepted | Focused checks, independent review, corrected evidence wording, active diagnostics, and source audit passed |
 | M1: permanent tests | accepted source | Integrated checks, independent reviews and source/archive audit passed; CI execution and non-host runtime remain separate gates |
 | M2: networking tools | accepted and published | Final source/index/archive and immutable-consumer gates passed; live/platform/performance readiness remains separate |
-| M3: platform/saves/input/progression | accepted source | Integrated gates, three independent reviews and scoped Input correction/re-review passed; final publication audits remain |
-| M4: content/voice/Remote Play/capture | pending | Per-component ABI/lifecycle plans and isolated implementation |
-| Remote package and game migration | partially verified | M0, M1 and M2 immutable URL/hash consumers build; game migration and final feature revision remain pending |
+| M3: platform/saves/input/progression | accepted and published | Integrated gates, reviews/correction and final source/index/archive/immutable-consumer checks passed |
+| M4: content/voice/Remote Play/capture | accepted source | Integration, full matrices, package/linkage checks and three independent reviews passed; final publication checks remain |
+| Remote package and game migration | partially verified | M0 through M3 immutable URL/hash consumers build; game migration and final feature revision remain pending |
 | Final acceptance/release record | pending | Integrated review, validation matrix, explicit residual release gates |
 
 ## Implementation topology and lane board
@@ -219,8 +224,66 @@ An initial inspection incorrectly required incidental Mach-O lobby imports on EL
 Two pi-lens probes timed out and remain inconclusive. Separate SDK-aware production/fixture clangd LSP probes completed with no findings.
 The changed actual package audit passed with 52 sources and 49 members. Unchanged complete matrices were not repeated.
 A fresh scoped reviewer confirmed the original P1 is resolved, with no new issue. The parent read the report and rechecked all 52 corrected source hashes and empty index.
-The parent accepted M3 source on 2026-10-20. Final document-inclusive package, indexed-source, Git archive and real immutable-consumer checks remain publication gates.
+The parent accepted M3 source on 2026-10-20. Final document-inclusive package, indexed-source and Git archive audits passed for the exact 29-path delta.
+Commit `24fcb967` was normally pushed. The actual immutable package matched the audited hash, and a fresh consumer passed build/install and negative probes.
+Production imports and debug sinks remained present. Installed runtime bytes matched the external SDK, whose 270 files remained unchanged.
+Neither publication consumer nor smoke was executed. The game HEAD, existing migration-document bytes and empty index remained unchanged.
 No M3 native-service execution, CI dispatch or performance evidence is established.
+
+The M4 read-only scout completed against accepted M3. The parent consumed its report and checked the SDK/source references.
+The parent verified all 52 source hashes, baseline HEAD, empty index and no ignored planning paths. All 270 SDK files remained unchanged.
+Official documentation supplements the header analysis. Generated search advice did not establish pending-query release or screenshot buffer retention guarantees.
+The parent accepted first-wave Voice, Remote Play and Timeline contracts, including exact default arguments and explicit lifecycle policies.
+A separate shared checkout adds Context voice/range state and a typed Remote Play session identity.
+Five Context tests and seven type tests passed in Debug/ReleaseFast. Both changed files passed active LSP diagnostics, formatting and whitespace checks.
+Three detached component writers delivered exact three-file handoffs and ended ownership.
+The parent read the reports and source, then checked all new-source hashes, 52 frozen inputs per lane, SDK270, unchanged HEADs and empty indexes.
+Ignored tooling caches/configuration remain inventoried and retained. These integrity checks do not replace artifact inspection or independent acceptance.
+The parent prepared five Workshop/screenshot schema/state files. Each native mode passed five Context, seven type, two capability-event and one request-kind test.
+Both Debug and ReleaseFast passed. Active LSP reported five clean paths without an inconclusive result.
+Two further detached checkouts contain those exact validated overlays and 52 frozen inputs each.
+Workshop and Screenshots delivered their three-file handoffs and ended ownership. The parent owns all shared integration.
+The parent checked their exact sources, 52 frozen inputs per lane, SDK270, baseline HEADs and empty indexes.
+The parent inspected all five component implementations and retained validation evidence without repeating unchanged matrices.
+First-wave artifact inspection covered 58 reported paths, including 12 runtime copies. Final-wave inspection covered 49 paths, including eight runtime copies.
+All 20 inspected production consumers retain required native imports. Inspected SDK-free artifacts have no Steam dependency, and no wrapper C++ runtime was found.
+Production consumers remained unexecuted. Screenshots and Voice probes retain Context acquisition paths, not native initialization.
+Workshop provides module-local completion/shutdown hooks. The parent must add Client call sites and native conversion during integration.
+Pending queries are not released as cancellation. Global session shutdown does not establish a query-specific successful release.
+Screenshot submission requires conservative borrowing through matching readiness, without an undocumented synchronous-copy promise.
+Standard __cplusplus checks were classified as lint false positives, without source suppression or a workaround.
+A narrowly approved test-only aborting pure-virtual entry point supports Timeline's real SDK-derived default-argument fixture. Parent inspection verified production absence, using COFF-object evidence on Windows.
+Remote Play's initial ZLS timeout remains inconclusive. A corrected same-protocol probe completed with an explicit empty diagnostic response.
+Workshop's final diagnostic protocol is clean and retained. Its initial raw ZLS transcript and related files were overwritten during a rerun and cannot be recovered from the retained evidence.
+That retention violation remains disclosed. No retrospective cleanup approval or complete initial-protocol claim is made.
+Parent integration will refine Workshop enum-output copying and correct inherited callback fixtures that populate two narrow enums outside their valid ranges.
+The latter is a test-fixture defect, not a demonstrated production callback failure. Original source and evidence remain retained.
+The parent integrated all ten owned callbacks, Workshop completion observation, action-free accessors and live-lease optional teardown.
+Public roots, five bridge/fixture additions, package inventories and retained consumer exports are registered.
+The initial Debug/ReleaseFast focused graphs passed 22/22 steps with 35 Zig tests and six native fixtures. Core covered 1771 bounded poll cases.
+Both modes passed 313 new SDK-free capability guard checks across 106 method/input selections. Consumer installation and negative probes also passed without execution.
+The parent then found generated cache files inside the integration checkout. The nested consumer had incorrectly rooted a cwd-relative cache path at the source build root.
+The source checker correctly rejected the 353 generated inputs. No ignore rule or source boundary was weakened.
+The parent corrected cache forwarding and prepared an exact 68-source successor, retaining the original checkout and generated cache in place.
+External absolute-cache, external spaced-relative-cache and source-cwd consumer cases passed, with exact source membership and bytes unchanged.
+The maintainer checker now exercises external-cwd relocated builds and verifies package inputs remain unchanged afterward. That full regression passed.
+All four optimization modes passed 678/678 aggregate steps. Each mode passed 130 main tests, two repeated lifecycle controls, 13 native fixtures and 313 M4 guards.
+Eight fatal bodies skipped in the ordinary suite. Their isolated checks ran separately, including the existing networking/platform/lifecycle guards and runner controls.
+All four ReleaseFast target graphs passed 44/44 compile/link/install steps. No cross-target program executed.
+A 28-path active diagnostic batch reported no language-server findings or inconclusive paths. One test-only printf recommendation was inapplicable to the libc-only fixture.
+The actual source-package audit checked 68 repository inputs and 65 package members. Relocated ReleaseFast tests, independent archive consumer probes and runtime bytes passed.
+Only the inspected pure archive-consumer main executed. Its retained native exports and the smoke application remained uncalled.
+The parent inspected 173 artifacts, including 20 retained production consumers and 117 SDK-free fixture/guard artifacts. Primary consumers retained 121 required native imports.
+Loader paths, callback sinks, Windows PDB publics, runtime byte equality and absence of a wrapper C++ runtime passed.
+An inspector initially missed the COFF import-pointer prefix. Corrected metadata inspection reused unchanged binaries and checked 16 production Timeline objects without the test-only ABI shim.
+No generated artifact was deleted or relocated, and the game remains unchanged.
+Three fresh independent reviews found no current issue in content ownership, capability lifecycles or distribution. The parent read every report.
+Post-review checks confirmed all 68 source inputs, SDK270, original incident cache, main/game state and empty indexes remained unchanged.
+Ten ignored ZLS cache files appeared during a consumer-build source read. They remain retained; the original 41 ignored files were unchanged.
+Review transcripts contain no explicit build/test/LSP command. The exact automatic hook was not traced, so the review is not described as producing no generated state.
+Historical official-page response IDs no longer resolved. The content reviewer inspected fresh retained official pages and a labeled line-wrapped derivative instead.
+The parent accepted M4 source on 2026-10-20. Final document-inclusive source/package/index audits and immutable publication checks remain next gates.
+M4 source acceptance does not authorize real downloads, microphone capture, invitations, screenshots or recording changes.
 
 Later writer lanes must record exclusive files/contracts, isolation paths, required gates, and a durable handoff before launch.
 Use separate worktrees for concurrent mutation.
@@ -295,7 +358,9 @@ Do not silently replace a failed subagent with another execution protocol.
 | M3 target/linkage/package gates | Integrated candidate and actual 52-source/49-member package | Four 36/36 compile/link/install graphs, 104 artifact inspections, relocated tests/install and archive/hash consumer passed; only pure consumer main ran |
 | M3 independent reviews | Completion ownership, Utils/Input and distribution | One P1 reserved-argument forwarding discrepancy found; no other defect reported |
 | M3 Input correction | Only c/input.cpp changed after broad review | Two negative controls, focused Debug/ReleaseFast tests, four-target fixture/consumer links, 12 artifact inspections, direct SDK-aware LSP and changed package audit passed; scoped re-review OK |
-| M3 source acceptance | Corrected 52-file candidate, 2026-10-20 | All reports read and corrected hashes checked; final document-inclusive publication audits remain; no native/device/performance readiness claim |
+| M3 source acceptance | Corrected 52-file candidate, 2026-10-20 | All reports read and corrected hashes checked; no native/device/performance readiness claim |
+| M3 publication | Commit `24fcb967`, tree `e1d35b79343ada9284a9214cfdaf7ed098712c4c` | Exact 29-path delta, 52 indexed/Git archive sources and 49 package members matched; normal push and remote equality passed |
+| M3 immutable consumer | Actual package and fresh Debug URL/hash dependency | Build/install, negative probes, native imports/sinks and runtime-byte checks passed; no consumer or smoke execution |
 | Game dependency migration | Remote URL/hash | Source migration and final feature revision remain pending; game changes stay uncommitted |
 
 ## Tooling observations

@@ -18,17 +18,21 @@ zig build test-networking-config test-networking-debug -Dsdk="$STEAMWORKS_SDK"
 zig build test-networking-guards -Dsdk="$STEAMWORKS_SDK"
 zig build test-platform-tools test-utils test-input -Dsdk="$STEAMWORKS_SDK"
 zig build test-platform-guards -Dsdk="$STEAMWORKS_SDK"
+zig build test-capabilities test-voice test-remote-play test-timeline test-workshop test-screenshots -Dsdk="$STEAMWORKS_SDK"
+zig build test-capability-guards -Dsdk="$STEAMWORKS_SDK"
 zig build test-consumer -Dsdk="$STEAMWORKS_SDK"
 zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast
 ```
 
-- `test` runs the normal Zig suite (including deterministic properties), eight
+- `test` runs the normal Zig suite (including deterministic properties), thirteen
   native fixtures, lifecycle runner self-tests, five original fatal checks,
-  networking/platform guards, and the independent consumer install/negative probes.
-  The normal suite deliberately skips seven fatal bodies. The separate lifecycle
+  networking/platform/capability guards, and the consumer install/negative probes.
+  The normal suite deliberately skips eight fatal bodies. The separate lifecycle
   control repeats the passing lifecycle test (and the root discovery test).
-- `test-core` exercises 1228 bounded acquired-callback cases, including correlated
-  secondary capture before release and owned data surviving source invalidation.
+- `test-core` exercises 1771 bounded acquired-callback cases, including correlated
+  secondary capture, Workshop completion retrieval and owned callback arrays.
+  Tests invalidate native storage before checking the owned copies. Native enum
+  fixtures use initialized official objects and representable unnamed values.
   Its uncalled production paths link Steam; its executed source substitutes the
   new keyboard/leaderboard getters. `test-services` exercises legacy services and
   new cloud/progression calls with every SDK entry/accessor substituted. It links
@@ -63,12 +67,26 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
   228 checks per mode. Client itself owns the current Context, not an old captured
   generation. Empty, invalid, pending/failed-state and consumed-owner paths cannot
   bypass the lease. Fake calls or aborting stubs cannot satisfy the expected panic.
+- `test-capabilities` filters Voice, Remote Play, Timeline, Workshop, Screenshots,
+  owned events and Client observation/teardown tests. Its native fixture aliases
+  substitute every exercised SDK method/accessor and link without Steam or a C++
+  runtime. Timeline's default-argument fixture derives from the official interface.
+  Its aborting pure-virtual entry point exists only under SW_TIMELINE_TEST.
+  No microphone, invitation, screenshot, hook, recording, download or content-file
+  operation occurs. Query rows and screenshot input have separate lifetimes.
+  Inert tests validate wrapper policy, not an undocumented SDK retention promise.
+- `test-capability-guards` uses one SDK-free artifact and the existing runner:
+  101 facade/owner/hook method-input selections × three lease failures, plus five
+  Client accessors × closed/foreign failures = 313 checks per mode. Empty, invalid,
+  repeated, consumed, pending, poisoned and capacity/exhaustion paths are covered.
+  Client owns the current Context, not a captured old generation. Fake native
+  calls, aborting stubs and ordinary errors cannot satisfy the expected panic.
 - `test-consumer` builds a separate dependency project with the consumer's default
   compiler/linker selection; it does not run its executable or recurse into
   dependency tests. Target, CPU model/features, optimization and explicit SDK
-  propagate. Uncalled initialization/shutdown/networking/platform exports retain
-  real production paths, including a reachable ownership transition and the
-  integrated keyboard/leaderboard callback-copy path. They are not
+  propagate. Uncalled initialization/shutdown/networking/platform/capability
+  exports retain real production paths, including reachable ownership transitions,
+  callback conversion and separate post-completion Workshop row reads. They are not
   application recipes and must remain unexecuted. A second no-capture consumer
   forces the real C++ registration symbol to survive dead stripping, which checks
   the required Zig sink without starting capture. Both consumers are install-only.
@@ -78,14 +96,16 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
   API-call request` and implicit integer-to-`ImageHandle` to fail with
   `expected type 'types.ImageHandle', found 'comptime_int'`. Unrelated SDK/build
   failures cannot satisfy those diagnostics; positive installation must also pass.
-- `test-compile` builds normal/control/property/networking/platform tests, five
-  original fatal artifacts, both SDK-free guard artifacts, target runner, eight
-  fixtures and independent consumer/probes without
+- `test-compile` builds normal/control/property/networking/platform/capability
+  tests, five original fatal artifacts, three SDK-free guard artifacts, target
+  runner, thirteen fixtures and independent consumer/probes without
   running target programs. It invokes a host Zig build process for the consumer,
   not a target executable. It does not install/run the smoke example.
 - Plain `zig build install` compiles/installs the smoke example and official
   runtime. Never run `live-test` as part of offline/package validation.
 
+Use `-j2` to bound each build invocation. Nested consumer builds and the optional
+maintainer checker also limit each invocation to two jobs.
 Use all four optimization modes for native aggregate gates. Use ReleaseFast
 `test-compile` for `aarch64-macos`, `x86_64-macos`, `x86_64-linux-gnu` and
 `x86_64-windows-gnu`; e.g. `-Dcpu=x86_64_v3` additionally exercises CPU features on
@@ -94,7 +114,8 @@ also enlarges all events. Compiler-emitted constants for the four targets measur
 Zig Event at 28,856 bytes and private C SwEvent at 28,848 bytes. This is not a
 runtime performance measurement. Physical Input, keyboard/overlay, native cloud,
 leaderboard/global-percentage behavior and backend configuration need separate
-authorized execution.
+authorized execution. Workshop, Voice, Remote Play, screenshot and Timeline native
+behavior also require separate device/app setup and side-effect authority.
 
 ## Optional maintainer source/package check
 

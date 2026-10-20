@@ -125,7 +125,8 @@ Three independent reviews completed. Ownership and distribution reviews found no
 The parent changed RunFrame to match the SDK's true default and corrected its fixture. Negative controls reject the original call in Debug and ReleaseFast.
 The fixed focused graphs passed 24 tests, one intentional skip and the Input fixture in both modes. Four-target fixture/consumer links, active diagnostics and the changed actual package audit passed.
 A scoped independent re-review confirmed the defect is resolved, with no new finding. The other 51 source files remained unchanged.
-The parent accepted M3 source on 2026-10-20. Final document-inclusive archive, indexed-source and immutable-consumer checks remain publication gates.
+The parent accepted M3 source on 2026-10-20. Final document-inclusive package, indexed-source and Git archive audits passed.
+Commit `24fcb967` was normally pushed. Its actual immutable URL/hash consumer passed build/install, negative probes and production-linkage/runtime-byte checks without execution.
 The full four-mode graphs above precede the narrow correction; the focused checks supplement them without repeating unchanged work.
 Source acceptance does not establish native-service readiness. No M3 native-service execution is implied.
 
@@ -147,13 +148,34 @@ Dynamic sync must not be enabled for a game until its save reload/conflict polic
 
 ### M4 — Optional game-facing capabilities approved for this pass
 
+The read-only SDK/source contract report is complete and consumed by the parent.
+The parent verified all 52 planning-source files and 270 SDK files remained unchanged.
+Voice, Remote Play and Timeline contracts now have parent-approved lifecycle, argument and bounded-output rules.
+Voice, Remote Play and Timeline writers delivered their three-file handoffs and ended ownership.
+Five shared schema/state files passed focused Debug/ReleaseFast tests and active diagnostics.
+Workshop and Screenshots also delivered their isolated handoffs and ended ownership.
+The parent inspected all five components and checked exact sources, frozen inputs, SDK integrity, empty indexes and retained artifacts.
+The parent integrated owned callbacks, lifecycle hooks, public roots, build/consumer registration and SDK-free lease guards.
+Initial Debug/ReleaseFast checks passed 35 focused Zig tests, six native fixtures and 313 new guard cases per mode.
+An external-cwd consumer build exposed a cache-path defect. The parent corrected it and retained the affected checkout and generated files intact.
+Three corrected consumer/cache-path cases passed with exact source membership unchanged. A clean source-only successor is the active candidate.
+All four native optimization modes passed 678/678 aggregate steps. Each mode passed 130 main tests and two repeated lifecycle controls, with eight expected fatal-body skips.
+All four ReleaseFast target graphs passed 44/44 compile/link/install steps without destination execution.
+The actual 65-member package passed source/archive checks, relocated tests, consumer probes and runtime-byte checks. Only the inspected pure consumer main executed.
+The parent inspected 173 retained artifacts. Twenty consumers retained required production imports, and 117 fixture/guard artifacts had no Steam dependency.
+Three fresh read-only reviews found no current issue in content ownership, capability lifecycles or distribution.
+The parent confirmed all 68 reviewed source inputs and SDK270 remained unchanged, then accepted M4 source on 2026-10-20.
+Final document-inclusive package, indexed-source and remote-consumer checks remain publication gates. Native-service readiness remains separate.
+Workshop's initial raw ZLS protocol was overwritten during its final rerun. The final clean protocol is retained; the earlier retention loss remains disclosed.
+No new live-action authority follows from planning or the approved API scope.
+
 | ID | Work | Acceptance | State |
 | --- | --- | --- | --- |
-| UGC-01 | Workshop subscriptions and downloads | List subscriptions, query installed/download state, request downloads, and expose copied results with explicit query cleanup | pending |
-| VOICE-01 | Voice capture and codec access | Explicit recording lifecycle, bounded compressed/decompressed buffers, rate/error fidelity, no hidden audio playback or transmission | pending |
-| REMOTE-01 | Remote Play integration | Typed sessions and copied session events/info; explicit invitation/UI actions, no unsolicited side effects | pending |
-| CAPTURE-01 | Screenshots | Typed handle, bounded image/file submission, hook/readiness events, explicit user/application intent | pending |
-| TIMELINE-01 | Recording markers | Modes, tooltips, instant/range markers and defined handle/lifecycle behavior using SDK 1.65 APIs | pending |
+| UGC-01 | Workshop subscriptions and downloads | List subscriptions, query installed/download state, request downloads, and expose copied results with explicit query cleanup | accepted |
+| VOICE-01 | Voice capture and codec access | Explicit recording lifecycle, bounded compressed/decompressed buffers, rate/error fidelity, no hidden audio playback or transmission | accepted |
+| REMOTE-01 | Remote Play integration | Typed sessions and copied session events/info; explicit invitation/UI actions, no unsolicited side effects | accepted |
+| CAPTURE-01 | Screenshots | Typed handle, bounded image/file submission, hook/readiness events, explicit user/application intent | accepted |
+| TIMELINE-01 | Recording markers | Modes, tooltips, instant/range markers and defined handle/lifecycle behavior using SDK 1.65 APIs | accepted |
 
 This is bounded game-facing coverage, not a commitment to mirror every method in each SDK interface.
 Workshop publishing/modification, unrestricted file loading, audio mixing, and gameplay replication are not included.
@@ -169,11 +191,11 @@ Workshop publishing/modification, unrestricted file loading, audio mixing, and g
 | LIVE-05 | Persistent stats/cloud | Configured test app, store outcomes, save round trips, failure cases, cache reload, and cleanup | blocked: app setup and write approval |
 | LIVE-06 | Input/overlay/handheld | Physical controllers, actual overlay/keyboard behavior, suspend/resume, and relevant handheld tests | blocked: hardware/session setup |
 | LIVE-07 | New service integration | Workshop download, voice device, Remote Play, screenshots, and recording checks with explicit side-effect approval | blocked: setup/approval |
-| PLATFORM-01 | Compile/link matrix | Four supported targets, all relevant modules/examples/fixtures/consumer, no target execution claims | pending after changes |
+| PLATFORM-01 | Compile/link matrix | Four supported targets, all relevant modules/examples/fixtures/consumer, no target execution claims | passed through M4; repeat affected scope after changes |
 | PLATFORM-02 | Native runtime matrix | Execute offline tests and installed consumer on Windows/Linux/Intel macOS in addition to arm64 macOS | blocked: hosts |
 | PLATFORM-03 | Full game builds/runtime | Preserve SDK-free game and validate enabled game on supported deployment hosts | native pending; other hosts blocked |
 | PERF-01 | Performance | Measured event, send/receive, allocation, and frame-time costs under representative workloads | pending; no current benchmark claim |
-| REVIEW-01 | Independent acceptance | Fresh read-only review of exact integrated source, ABI, ownership, tests, package and game migration | pending |
+| REVIEW-01 | Independent acceptance | Fresh read-only review of exact integrated source, ABI, ownership, tests, package and game migration | library through M4 passed; game migration review pending |
 | RELEASE-01 | Production readiness record | Exact source revision, successful gates, known limits, and remaining app-specific obligations | pending |
 
 Authorized live checks use App ID 480 only: read-only queries, local socket traffic, temporary private lobbies with departure, and ticket issue/cancellation.

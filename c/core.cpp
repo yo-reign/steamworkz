@@ -237,6 +237,51 @@ void convert(const SteamInputDeviceDisconnected_t &v, SwEvent &e) {
     e.kind = SW_INPUT_DISCONNECTED; e.data.input_device.controller = v.m_ulDisconnectedDeviceHandle;
 }
 
+void convert(const SteamUGCQueryCompleted_t &v, SwEvent &e) {
+    static_assert(sizeof(v.m_rgchNextCursor) == sizeof(e.data.workshop_query.cursor), "Workshop cursor size changed");
+    e.kind = SW_WORKSHOP_QUERY_COMPLETED;
+    auto &out = e.data.workshop_query;
+    out.query = v.m_handle; out.result = enum_value(v.m_eResult);
+    out.returned = v.m_unNumResultsReturned; out.total = v.m_unTotalMatchingResults;
+    out.cached = v.m_bCachedData;
+    memcpy(out.cursor, v.m_rgchNextCursor, sizeof(out.cursor));
+}
+void convert(const ItemInstalled_t &v, SwEvent &e) {
+    e.kind = SW_WORKSHOP_ITEM_INSTALLED;
+    auto &out = e.data.workshop_installed;
+    out.app = v.m_unAppID; out.item = v.m_nPublishedFileId;
+    out.legacy_content = v.m_hLegacyContent; out.manifest = v.m_unManifestID;
+}
+void convert(const DownloadItemResult_t &v, SwEvent &e) {
+    e.kind = SW_WORKSHOP_DOWNLOADED;
+    e.data.workshop_download.app = v.m_unAppID; e.data.workshop_download.item = v.m_nPublishedFileId;
+    e.data.workshop_download.result = enum_value(v.m_eResult);
+}
+void convert(const UserSubscribedItemsListChanged_t &v, SwEvent &e) {
+    e.kind = SW_WORKSHOP_SUBSCRIPTIONS_CHANGED; e.data.workshop_subscriptions.app = v.m_nAppID;
+}
+void convert(const SteamRemotePlaySessionConnected_t &v, SwEvent &e) {
+    e.kind = SW_REMOTE_PLAY_CONNECTED; e.data.remote_session.session = v.m_unSessionID;
+}
+void convert(const SteamRemotePlaySessionDisconnected_t &v, SwEvent &e) {
+    e.kind = SW_REMOTE_PLAY_DISCONNECTED; e.data.remote_session.session = v.m_unSessionID;
+}
+void convert(const SteamRemotePlayTogetherGuestInvite_t &v, SwEvent &e) {
+    static_assert(sizeof(v.m_szConnectURL) == sizeof(e.data.remote_invite.url), "Remote Play invitation size changed");
+    e.kind = SW_REMOTE_PLAY_GUEST_INVITE;
+    memcpy(e.data.remote_invite.url, v.m_szConnectURL, sizeof(e.data.remote_invite.url));
+}
+void convert(const SteamRemotePlaySessionAvatarLoaded_t &v, SwEvent &e) {
+    e.kind = SW_REMOTE_PLAY_AVATAR_LOADED;
+    auto &out = e.data.remote_avatar;
+    out.session = v.m_unSessionID; out.image = v.m_iImage; out.width = v.m_iWide; out.height = v.m_iTall;
+}
+void convert(const ScreenshotReady_t &v, SwEvent &e) {
+    e.kind = SW_SCREENSHOT_READY; e.data.screenshot.handle = v.m_hLocal;
+    e.data.screenshot.result = enum_value(v.m_eResult);
+}
+void convert(const ScreenshotRequested_t &, SwEvent &e) { e.kind = SW_SCREENSHOT_REQUESTED; }
+
 // Only these two callbacks require secondary native reads. Correlate first.
 template<class T, class Source> void capture(const T &, SwEvent &, const SwPollState &, Source &) {}
 template<class Source> void capture(const GamepadTextInputDismissed_t &v, SwEvent &out, const SwPollState &state, Source &source) {
@@ -351,6 +396,16 @@ template<class Source> bool poll(Source &source, int32_t pipe, SwEvent &out, con
         case RemoteStorageLocalFileChange_t::k_iCallback: decode<RemoteStorageLocalFileChange_t>(message, out); break;
         case SteamInputDeviceConnected_t::k_iCallback: decode<SteamInputDeviceConnected_t>(message, out); break;
         case SteamInputDeviceDisconnected_t::k_iCallback: decode<SteamInputDeviceDisconnected_t>(message, out); break;
+        case SteamUGCQueryCompleted_t::k_iCallback: decode<SteamUGCQueryCompleted_t>(message, out); break;
+        case ItemInstalled_t::k_iCallback: decode<ItemInstalled_t>(message, out); break;
+        case DownloadItemResult_t::k_iCallback: decode<DownloadItemResult_t>(message, out); break;
+        case UserSubscribedItemsListChanged_t::k_iCallback: decode<UserSubscribedItemsListChanged_t>(message, out); break;
+        case SteamRemotePlaySessionConnected_t::k_iCallback: decode<SteamRemotePlaySessionConnected_t>(message, out); break;
+        case SteamRemotePlaySessionDisconnected_t::k_iCallback: decode<SteamRemotePlaySessionDisconnected_t>(message, out); break;
+        case SteamRemotePlayTogetherGuestInvite_t::k_iCallback: decode<SteamRemotePlayTogetherGuestInvite_t>(message, out); break;
+        case SteamRemotePlaySessionAvatarLoaded_t::k_iCallback: decode<SteamRemotePlaySessionAvatarLoaded_t>(message, out); break;
+        case ScreenshotReady_t::k_iCallback: decode<ScreenshotReady_t>(message, out); break;
+        case ScreenshotRequested_t::k_iCallback: decode<ScreenshotRequested_t>(message, out); break;
         case SteamAPICallCompleted_t::k_iCallback: {
             if (message.m_cubParam != sizeof(SteamAPICallCompleted_t) || !message.m_pubParam) { out.kind = SW_MALFORMED; break; }
             SteamAPICallCompleted_t call;
@@ -367,6 +422,7 @@ template<class Source> bool poll(Source &source, int32_t pipe, SwEvent &out, con
                 case LeaderboardScoresDownloaded_t::k_iCallback: completion<LeaderboardScoresDownloaded_t>(source, pipe, call, out, state); break;
                 case LeaderboardScoreUploaded_t::k_iCallback: completion<LeaderboardScoreUploaded_t>(source, pipe, call, out); break;
                 case GlobalAchievementPercentagesReady_t::k_iCallback: completion<GlobalAchievementPercentagesReady_t>(source, pipe, call, out); break;
+                case SteamUGCQueryCompleted_t::k_iCallback: completion<SteamUGCQueryCompleted_t>(source, pipe, call, out); break;
                 default: break;
             }
             break;
@@ -407,6 +463,9 @@ constexpr uint64 test_lobby = 0x123456789abcdef0ULL;
 constexpr uint64 test_user = 0x23456789abcdef01ULL;
 constexpr uint64 test_game = 0x3456789abcdef012ULL;
 constexpr int32_t future_value = 123456;
+// Unnamed values must still be representable by each SDK enum's value range.
+constexpr EResult future_result = static_cast<EResult>(255);
+constexpr EAuthSessionResponse future_auth_response = static_cast<EAuthSessionResponse>(15);
 
 int identity_calls = 0;
 SteamNetworkingIdentity formatted_identity = {};
@@ -493,11 +552,12 @@ template<class T> void drained(FakeCallbacks<T> &source, GuardedEvent &out, int 
     out.check_guards();
     ++cases_run;
 }
-// Future enum representations are copied, never evaluated as native enums.
-template<class T> void future_enum(T &value) {
-    static_assert(sizeof(value) == sizeof(future_value), "SDK enum width changed");
-    memcpy(&value, &future_value, sizeof(value));
-}
+// Typed construction avoids manufacturing invalid native enum objects. The two
+// networking enums have Force32Bit sentinels; EResult and auth responses do not.
+void future_enum(EResult &value) { value = future_result; }
+void future_enum(EAuthSessionResponse &value) { value = future_auth_response; }
+void future_enum(ESteamNetworkingAvailability &value) { value = static_cast<ESteamNetworkingAvailability>(future_value); }
+void future_enum(ESteamNetworkingConnectionState &value) { value = static_cast<ESteamNetworkingConnectionState>(future_value); }
 void verify_result(const LobbyCreated_t &v, const SwEvent &e) {
     expect(e.kind == SW_LOBBY_CREATED && e.data.lobby_created.lobby == v.m_ulSteamIDLobby);
     expect(e.data.lobby_created.result == enum_value(v.m_eResult));
@@ -535,6 +595,14 @@ void verify_result(const LeaderboardScoreUploaded_t &v, const SwEvent &e) {
 void verify_result(const GlobalAchievementPercentagesReady_t &v, const SwEvent &e) {
     expect(e.kind == SW_GLOBAL_PERCENTAGES_READY && e.data.global_percentages.game == v.m_nGameID);
     expect(e.data.global_percentages.result == enum_value(v.m_eResult));
+}
+
+void verify_result(const SteamUGCQueryCompleted_t &v, const SwEvent &e) {
+    expect(e.kind == SW_WORKSHOP_QUERY_COMPLETED);
+    const auto &out = e.data.workshop_query;
+    expect(out.query == v.m_handle && out.result == enum_value(v.m_eResult));
+    expect(out.returned == v.m_unNumResultsReturned && out.total == v.m_unTotalMatchingResults && out.cached == v.m_bCachedData);
+    expect(memcmp(out.cursor, v.m_rgchNextCursor, sizeof(v.m_rgchNextCursor)) == 0);
 }
 
 template<class T> void completion_cases(const char *name, const T &value) {
@@ -749,7 +817,7 @@ void test_broadcasts() {
     broadcast(connected, SW_CONNECTED, (void)e);
     SteamServersDisconnected_t disconnected = {};
     future_enum(disconnected.m_eResult);
-    broadcast(disconnected, SW_DISCONNECTED, expect(e.data.connection.result == future_value));
+    broadcast(disconnected, SW_DISCONNECTED, expect(e.data.connection.result == future_result));
     SteamServerConnectFailure_t failure = {};
     failure.m_eResult = k_EResultNoConnection; failure.m_bStillRetrying = true;
     broadcast(failure, SW_CONNECT_FAILURE, expect(e.data.connection.result == k_EResultNoConnection && e.data.connection.retrying == 1));
@@ -792,17 +860,17 @@ void test_broadcasts() {
     LobbyGameCreated_t game = {}; game.m_ulSteamIDLobby = test_lobby; game.m_ulSteamIDGameServer = test_user; game.m_unIP = 0x7f000001; game.m_usPort = 27015;
     broadcast(game, SW_LOBBY_GAME_CREATED, expect(e.data.lobby_game.lobby == test_lobby && e.data.lobby_game.server == test_user && e.data.lobby_game.ipv4 == 0x7f000001 && e.data.lobby_game.port == 27015));
     GetAuthSessionTicketResponse_t auth_ticket = {}; auth_ticket.m_hAuthTicket = 0x87654321U; future_enum(auth_ticket.m_eResult);
-    broadcast(auth_ticket, SW_AUTH_TICKET, expect(e.data.auth_ticket.ticket == 0x87654321U && e.data.auth_ticket.result == future_value));
+    broadcast(auth_ticket, SW_AUTH_TICKET, expect(e.data.auth_ticket.ticket == 0x87654321U && e.data.auth_ticket.result == future_result));
     ValidateAuthTicketResponse_t auth = {}; auth.m_SteamID = CSteamID(test_user); auth.m_OwnerSteamID = CSteamID(test_lobby);
     static_assert(k_EAuthSessionResponseAuthTicketNetworkIdentityFailure == 10, "auth response mapping changed");
     auth.m_eAuthSessionResponse = k_EAuthSessionResponseAuthTicketNetworkIdentityFailure;
     broadcast(auth, SW_AUTH_VALIDATED, expect(e.data.auth_validated.user == test_user && e.data.auth_validated.owner == test_lobby && e.data.auth_validated.response == 10));
     future_enum(auth.m_eAuthSessionResponse);
-    broadcast(auth, SW_AUTH_VALIDATED, expect(e.data.auth_validated.user == test_user && e.data.auth_validated.owner == test_lobby && e.data.auth_validated.response == future_value));
+    broadcast(auth, SW_AUTH_VALIDATED, expect(e.data.auth_validated.user == test_user && e.data.auth_validated.owner == test_lobby && e.data.auth_validated.response == future_auth_response));
     UserStatsReceived_t stats = {}; stats.m_nGameID = test_game; stats.m_steamIDUser = CSteamID(test_user); future_enum(stats.m_eResult);
     broadcast(stats, SW_STATS_RECEIVED, verify_result(stats, e));
     UserStatsStored_t stored = {}; stored.m_nGameID = test_game; future_enum(stored.m_eResult);
-    broadcast(stored, SW_STATS_STORED, expect(e.data.stats.game == test_game && e.data.stats.result == future_value));
+    broadcast(stored, SW_STATS_STORED, expect(e.data.stats.game == test_game && e.data.stats.result == future_result));
     UserStatsUnloaded_t unloaded = {}; unloaded.m_steamIDUser = CSteamID(test_user);
     broadcast(unloaded, SW_STATS_UNLOADED, expect(e.data.stats.user == test_user));
     RemoteStorageFileWriteAsyncComplete_t written = {}; future_enum(written.m_eResult);
@@ -826,6 +894,54 @@ template<size_t N> void text_pattern(char (&text)[N], int pattern) {
     if (pattern == 1) text[N / 2] = 0;
     if (pattern == 2) text[N - 1] = 0;
 }
+void test_capability_callbacks() {
+    for (int pattern = 0; pattern != 4; ++pattern) {
+        test_variant = pattern;
+        SteamUGCQueryCompleted_t query = {};
+        query.m_handle = pattern == 0 ? 0 : UINT64_MAX;
+        query.m_unNumResultsReturned = pattern == 0 ? 0 : UINT32_MAX;
+        query.m_unTotalMatchingResults = 91; query.m_bCachedData = pattern % 2 != 0;
+        text_pattern(query.m_rgchNextCursor, pattern);
+        const EResult results[] = {k_EResultOK, k_EResultFail, future_result};
+        for (EResult result : results) {
+            query.m_eResult = result;
+            completion_cases("SteamUGCQueryCompleted_t/result-and-owned-cursor", query);
+            broadcast(query, SW_WORKSHOP_QUERY_COMPLETED, verify_result(query, e));
+        }
+        SteamRemotePlayTogetherGuestInvite_t invite = {};
+        text_pattern(invite.m_szConnectURL, pattern);
+        broadcast(invite, SW_REMOTE_PLAY_GUEST_INVITE,
+            expect(memcmp(e.data.remote_invite.url, invite.m_szConnectURL, sizeof(invite.m_szConnectURL)) == 0));
+    }
+    ItemInstalled_t installed = {};
+    installed.m_unAppID = 73; installed.m_nPublishedFileId = test_lobby;
+    installed.m_hLegacyContent = test_user; installed.m_unManifestID = test_game;
+    broadcast(installed, SW_WORKSHOP_ITEM_INSTALLED,
+        expect(e.data.workshop_installed.app == 73 && e.data.workshop_installed.item == test_lobby);
+        expect(e.data.workshop_installed.legacy_content == test_user && e.data.workshop_installed.manifest == test_game));
+    DownloadItemResult_t downloaded = {}; downloaded.m_unAppID = 73; downloaded.m_nPublishedFileId = test_lobby;
+    future_enum(downloaded.m_eResult);
+    broadcast(downloaded, SW_WORKSHOP_DOWNLOADED,
+        expect(e.data.workshop_download.app == 73 && e.data.workshop_download.item == test_lobby && e.data.workshop_download.result == future_result));
+    UserSubscribedItemsListChanged_t subscriptions = {}; subscriptions.m_nAppID = 73;
+    broadcast(subscriptions, SW_WORKSHOP_SUBSCRIPTIONS_CHANGED, expect(e.data.workshop_subscriptions.app == 73));
+    SteamRemotePlaySessionConnected_t connected = {}; connected.m_unSessionID = UINT32_MAX;
+    broadcast(connected, SW_REMOTE_PLAY_CONNECTED, expect(e.data.remote_session.session == UINT32_MAX));
+    SteamRemotePlaySessionDisconnected_t disconnected = {}; disconnected.m_unSessionID = 0;
+    broadcast(disconnected, SW_REMOTE_PLAY_DISCONNECTED, expect(e.data.remote_session.session == 0));
+    SteamRemotePlaySessionAvatarLoaded_t avatar = {};
+    avatar.m_unSessionID = 71; avatar.m_iImage = -17; avatar.m_iWide = -1; avatar.m_iTall = 0;
+    broadcast(avatar, SW_REMOTE_PLAY_AVATAR_LOADED,
+        expect(e.data.remote_avatar.session == 71 && e.data.remote_avatar.image == -17 && e.data.remote_avatar.width == -1 && e.data.remote_avatar.height == 0));
+    ScreenshotReady_t screenshot = {}; screenshot.m_hLocal = UINT32_MAX;
+    future_enum(screenshot.m_eResult);
+    broadcast(screenshot, SW_SCREENSHOT_READY, expect(e.data.screenshot.handle == UINT32_MAX && e.data.screenshot.result == future_result));
+    screenshot.m_hLocal = 0; screenshot.m_eResult = k_EResultFail;
+    broadcast(screenshot, SW_SCREENSHOT_READY, expect(e.data.screenshot.handle == 0 && e.data.screenshot.result == k_EResultFail));
+    ScreenshotRequested_t requested = {};
+    broadcast(requested, SW_SCREENSHOT_REQUESTED, (void)e);
+}
+
 void test_text_and_ticket_bounds() {
     for (int pattern = 0; pattern != 4; ++pattern) {
         test_variant = pattern;
@@ -863,7 +979,7 @@ void test_text_and_ticket_bounds() {
         const bool valid = length >= 0 && size_t(length) <= sizeof(ticket.m_rgubTicket);
         broadcast(ticket, valid ? SW_WEB_TICKET : SW_MALFORMED,
             if (valid) {
-                expect(e.data.web_ticket.ticket == 0x87654321U && e.data.web_ticket.result == future_value && e.data.web_ticket.size == uint32_t(length));
+                expect(e.data.web_ticket.ticket == 0x87654321U && e.data.web_ticket.result == future_result && e.data.web_ticket.size == uint32_t(length));
                 expect(memcmp(e.data.web_ticket.bytes, ticket.m_rgubTicket, size_t(length)) == 0);
                 for (size_t i = size_t(length); i != sizeof(e.data.web_ticket.bytes); ++i) expect(e.data.web_ticket.bytes[i] == 0);
             });
@@ -878,6 +994,7 @@ int main() {
     test_keyboard_capture();
     test_unknown_callbacks();
     test_broadcasts();
+    test_capability_callbacks();
     test_text_and_ticket_bounds();
     printf("Steamworks callback fixtures passed (%d bounded poll cases)\n", cases_run);
 }

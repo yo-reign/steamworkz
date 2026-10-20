@@ -22,6 +22,7 @@
         "tests/lifecycle_runner.zig",
         "tests/networking_guards.cpp",
         "tests/platform_guards.cpp",
+        "tests/capability_guards.cpp",
         "tests/offline/check.py",
         "tests/offline/README.md",
     },

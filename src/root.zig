@@ -15,6 +15,11 @@ comptime {
 pub const Lobbies = @import("Lobbies.zig");
 pub const Utils = @import("Utils.zig");
 pub const Input = @import("Input.zig");
+pub const Voice = @import("Voice.zig");
+pub const RemotePlay = @import("RemotePlay.zig");
+pub const Timeline = @import("Timeline.zig");
+pub const Workshop = @import("Workshop.zig");
+pub const Screenshots = @import("Screenshots.zig");
 pub const Friends = @import("services.zig").Friends;
 pub const Apps = @import("services.zig").Apps;
 pub const Stats = @import("services.zig").Stats;
@@ -32,6 +37,10 @@ pub const ImageHandle = @import("types.zig").ImageHandle;
 pub const Leaderboard = @import("types.zig").Leaderboard;
 pub const LeaderboardEntry = @import("types.zig").LeaderboardEntry;
 pub const LeaderboardEntries = @import("types.zig").LeaderboardEntries;
+pub const RemotePlaySession = @import("types.zig").RemotePlaySession;
+pub const WorkshopItem = @import("types.zig").WorkshopItem;
+pub const WorkshopQuery = @import("types.zig").WorkshopQuery;
+pub const ScreenshotHandle = @import("types.zig").ScreenshotHandle;
 pub const Result = @import("types.zig").Result;
 
 test {
@@ -47,4 +56,9 @@ test {
     _ = Lobbies;
     _ = Utils;
     _ = Input;
+    _ = Voice;
+    _ = RemotePlay;
+    _ = Timeline;
+    _ = Workshop;
+    _ = Screenshots;
 }

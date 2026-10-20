@@ -16,10 +16,13 @@ build.zig build.zig.zon README.md LICENSE ROADMAP.md CHECKPOINT.md
 c/core.cpp c/core.h c/networking.cpp c/networking.h c/lobbies.cpp c/lobbies.h
 c/services.cpp c/services.h c/types.h c/utils.cpp c/utils.h c/input.cpp c/input.h
 c/networking_config.cpp c/networking_config.h c/networking_debug.cpp c/networking_debug.h
+c/voice.cpp c/voice.h c/remote_play.cpp c/remote_play.h c/timeline.cpp c/timeline.h
+c/workshop.cpp c/workshop.h c/screenshots.cpp c/screenshots.h
 src/Client.zig src/Context.zig src/Networking.zig src/NetworkingConfig.zig src/NetworkingDebug.zig
 src/Lobbies.zig src/events.zig src/Utils.zig src/Input.zig
+src/Voice.zig src/RemotePlay.zig src/Timeline.zig src/Workshop.zig src/Screenshots.zig
 src/native.zig src/requests.zig src/root.zig src/services.zig src/types.zig
-examples/smoke.zig tests/lifecycle_runner.zig tests/networking_guards.cpp tests/platform_guards.cpp
+examples/smoke.zig tests/lifecycle_runner.zig tests/networking_guards.cpp tests/platform_guards.cpp tests/capability_guards.cpp
 tests/consumer/build.zig tests/consumer/build.zig.zon tests/consumer/main.zig tests/consumer/no_debug.zig
 tests/consumer/invalid_request.zig tests/consumer/invalid_image.zig
 tests/offline/check.py tests/offline/README.md
@@ -209,10 +212,15 @@ def main():
         path = relocated / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-    common = ["-Dsdk=" + str(sdk), "-Doptimize=ReleaseFast", "--summary", "all"]
+    common = ["-Dsdk=" + str(sdk), "-Doptimize=ReleaseFast", "-j2", "--summary", "all"]
+    # Launch outside the package root. Nested builds must preserve cache paths
+    # relative to the invoking process, not reinterpret them relative to build.zig.
     run("relocated-test-install", [args.zig, "build", "test", "install", *common,
+        "--build-file", str(relocated / "build.zig"),
         "--cache-dir", str(evidence / "relocated-cache"), "--global-cache-dir", str(evidence / "relocated-global"),
-        "--prefix", str(evidence / "relocated-install")], relocated)
+        "--prefix", str(evidence / "relocated-install")], evidence)
+    require({p.relative_to(relocated).as_posix(): p.read_bytes() for p in relocated.rglob("*") if p.is_file()} == package,
+            "relocated build wrote into package sources")
     consumer = evidence / "consumer"
     consumer.mkdir()
     # Copy every consumer source from the already validated exact allowlist.

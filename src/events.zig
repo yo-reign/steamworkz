@@ -98,6 +98,34 @@ pub const Event = struct {
         cloud_changed,
         input_connected: Input.Controller,
         input_disconnected: Input.Controller,
+        /// Completion metadata only. Rows remain owned by Workshop.Query until release.
+        workshop_query_completed: struct {
+            query: types.WorkshopQuery,
+            result: Result,
+            returned: u32,
+            total: u32,
+            cached: bool,
+            cursor: [256]u8,
+            pub fn cursorText(self: *const @This()) []const u8 {
+                return types.text(&self.cursor);
+            }
+        },
+        workshop_item_installed: struct { app: AppId, item: types.WorkshopItem, legacy_content: u64, manifest: u64 },
+        /// Broadcast result, not a uniquely correlated download request.
+        workshop_downloaded: struct { app: AppId, item: types.WorkshopItem, result: Result },
+        workshop_subscriptions_changed: AppId,
+        remote_play_connected: types.RemotePlaySession,
+        remote_play_disconnected: types.RemotePlaySession,
+        remote_play_guest_invite: struct {
+            url: [1024]u8,
+            /// Borrows owned invitation-bearing bytes. Do not log or open automatically.
+            pub fn urlText(self: *const @This()) []const u8 {
+                return types.text(&self.url);
+            }
+        },
+        remote_play_avatar_loaded: struct { session: types.RemotePlaySession, image: types.ImageHandle, width: i32, height: i32 },
+        screenshot_ready: struct { handle: types.ScreenshotHandle, result: Result },
+        screenshot_requested,
     },
 };
 
@@ -167,6 +195,16 @@ pub fn decode(native: *const c.SwEvent) Event {
             c.SW_CLOUD_CHANGED => .cloud_changed,
             c.SW_INPUT_CONNECTED => .{ .input_connected = @enumFromInt(d.input_device.controller) },
             c.SW_INPUT_DISCONNECTED => .{ .input_disconnected = @enumFromInt(d.input_device.controller) },
+            c.SW_WORKSHOP_QUERY_COMPLETED => .{ .workshop_query_completed = .{ .query = @enumFromInt(d.workshop_query.query), .result = @enumFromInt(d.workshop_query.result), .returned = d.workshop_query.returned, .total = d.workshop_query.total, .cached = d.workshop_query.cached != 0, .cursor = d.workshop_query.cursor } },
+            c.SW_WORKSHOP_ITEM_INSTALLED => .{ .workshop_item_installed = .{ .app = @enumFromInt(d.workshop_installed.app), .item = @enumFromInt(d.workshop_installed.item), .legacy_content = d.workshop_installed.legacy_content, .manifest = d.workshop_installed.manifest } },
+            c.SW_WORKSHOP_DOWNLOADED => .{ .workshop_downloaded = .{ .app = @enumFromInt(d.workshop_download.app), .item = @enumFromInt(d.workshop_download.item), .result = @enumFromInt(d.workshop_download.result) } },
+            c.SW_WORKSHOP_SUBSCRIPTIONS_CHANGED => .{ .workshop_subscriptions_changed = @enumFromInt(d.workshop_subscriptions.app) },
+            c.SW_REMOTE_PLAY_CONNECTED => .{ .remote_play_connected = @enumFromInt(d.remote_session.session) },
+            c.SW_REMOTE_PLAY_DISCONNECTED => .{ .remote_play_disconnected = @enumFromInt(d.remote_session.session) },
+            c.SW_REMOTE_PLAY_GUEST_INVITE => .{ .remote_play_guest_invite = .{ .url = d.remote_invite.url } },
+            c.SW_REMOTE_PLAY_AVATAR_LOADED => .{ .remote_play_avatar_loaded = .{ .session = @enumFromInt(d.remote_avatar.session), .image = @enumFromInt(d.remote_avatar.image), .width = d.remote_avatar.width, .height = d.remote_avatar.height } },
+            c.SW_SCREENSHOT_READY => .{ .screenshot_ready = .{ .handle = @enumFromInt(d.screenshot.handle), .result = @enumFromInt(d.screenshot.result) } },
+            c.SW_SCREENSHOT_REQUESTED => .screenshot_requested,
             else => .unhandled,
         },
     };
@@ -425,6 +463,75 @@ test "web ticket length is checked before exposing its bytes" {
     native.kind = c.SW_WEB_TICKET;
     native.data.web_ticket.size = native.data.web_ticket.bytes.len + 1;
     try std.testing.expect(decode(&native).payload == .malformed);
+}
+
+test "capability events own query metadata and complete installed item identities" {
+    var raw = std.mem.zeroes(c.SwEvent);
+    raw.kind = c.SW_WORKSHOP_QUERY_COMPLETED;
+    raw.call = 71;
+    raw.callback_id = 3401;
+    raw.data.workshop_query = .{ .query = 0, .result = 123456, .returned = 3, .total = 19, .cached = 1, .cursor = @splat('c') };
+    const event = decode(&raw);
+    @memset(std.mem.asBytes(&raw), 0);
+    const query = &event.payload.workshop_query_completed;
+    try std.testing.expectEqual(@as(u64, 71), @intFromEnum(event.call));
+    try std.testing.expectEqual(@as(i32, 3401), event.callback_id);
+    try std.testing.expectEqual(@as(u64, 0), @intFromEnum(query.query));
+    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(query.result));
+    try std.testing.expectEqual(@as(u32, 3), query.returned);
+    try std.testing.expectEqual(@as(u32, 19), query.total);
+    try std.testing.expect(query.cached);
+    try std.testing.expectEqualStrings(&(@as([256]u8, @splat('c'))), query.cursorText());
+
+    raw.kind = c.SW_WORKSHOP_ITEM_INSTALLED;
+    raw.data.workshop_installed = .{ .app = 23, .item = 29, .legacy_content = 31, .manifest = std.math.maxInt(u64) };
+    const installed = decode(&raw).payload.workshop_item_installed;
+    @memset(std.mem.asBytes(&raw), 0);
+    try std.testing.expectEqual(@as(u32, 23), @intFromEnum(installed.app));
+    try std.testing.expectEqual(@as(u64, 29), @intFromEnum(installed.item));
+    try std.testing.expectEqual(@as(u64, 31), installed.legacy_content);
+    try std.testing.expectEqual(std.math.maxInt(u64), installed.manifest);
+    raw.kind = c.SW_WORKSHOP_DOWNLOADED;
+    raw.data.workshop_download = .{ .app = 37, .item = 41, .result = -123456 };
+    const downloaded = decode(&raw);
+    try std.testing.expect(downloaded.call == .invalid);
+    try std.testing.expectEqual(@as(u32, 37), @intFromEnum(downloaded.payload.workshop_downloaded.app));
+    try std.testing.expectEqual(@as(u64, 41), @intFromEnum(downloaded.payload.workshop_downloaded.item));
+    try std.testing.expectEqual(@as(i32, -123456), @intFromEnum(downloaded.payload.workshop_downloaded.result));
+    raw.kind = c.SW_WORKSHOP_SUBSCRIPTIONS_CHANGED;
+    raw.data.workshop_subscriptions.app = 43;
+    try std.testing.expectEqual(@as(u32, 43), @intFromEnum(decode(&raw).payload.workshop_subscriptions_changed));
+}
+
+test "capability events retain invitation bytes signed avatar data and screenshot failures" {
+    var raw = std.mem.zeroes(c.SwEvent);
+    raw.kind = c.SW_REMOTE_PLAY_GUEST_INVITE;
+    raw.data.remote_invite.url = @splat('u');
+    const invitation = decode(&raw);
+    @memset(std.mem.asBytes(&raw), 0);
+    try std.testing.expectEqualStrings(&(@as([1024]u8, @splat('u'))), invitation.payload.remote_play_guest_invite.urlText());
+    inline for (.{ .{ c.SW_REMOTE_PLAY_CONNECTED, .remote_play_connected }, .{ c.SW_REMOTE_PLAY_DISCONNECTED, .remote_play_disconnected } }) |pair| {
+        raw.kind = pair[0];
+        raw.data.remote_session.session = 47;
+        const event = decode(&raw);
+        try std.testing.expectEqual(@as(u32, 47), @intFromEnum(@field(event.payload, @tagName(pair[1]))));
+        try std.testing.expect(event.call == .invalid);
+    }
+    raw.kind = c.SW_REMOTE_PLAY_AVATAR_LOADED;
+    raw.data.remote_avatar = .{ .session = 53, .image = -1, .width = -3, .height = 0 };
+    const avatar = decode(&raw).payload.remote_play_avatar_loaded;
+    try std.testing.expectEqual(@as(u32, 53), @intFromEnum(avatar.session));
+    try std.testing.expectEqual(@as(i32, -1), @intFromEnum(avatar.image));
+    try std.testing.expectEqual(@as(i32, -3), avatar.width);
+    try std.testing.expectEqual(@as(i32, 0), avatar.height);
+    raw.kind = c.SW_SCREENSHOT_READY;
+    raw.data.screenshot = .{ .handle = 59, .result = 123456 };
+    const ready = decode(&raw).payload.screenshot_ready;
+    @memset(std.mem.asBytes(&raw), 0);
+    try std.testing.expectEqual(@as(u32, 59), @intFromEnum(ready.handle));
+    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(ready.result));
+    raw.kind = c.SW_SCREENSHOT_REQUESTED;
+    try std.testing.expect(decode(&raw).payload == .screenshot_requested);
 }
 
 test "property web ticket boundary lengths copy binary payload and correlation" {

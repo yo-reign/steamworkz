@@ -4,6 +4,14 @@ pub const SteamId = enum(u64) { invalid = 0, _ };
 pub const AppId = enum(u32) { invalid = 0, spacewar = 480, _ };
 pub const ApiCall = enum(u64) { invalid = 0, _ };
 pub const AuthTicket = enum(u32) { invalid = 0, _ };
+/// Remote Play session identity. Zero denotes an absent or invalid session.
+pub const RemotePlaySession = enum(u32) { invalid = 0, _ };
+/// Published Workshop item identity, not a download or subscription owner.
+pub const WorkshopItem = enum(u64) { invalid = 0, _ };
+/// Native query identity. The Workshop.Query owner controls its lifetime.
+pub const WorkshopQuery = enum(u64) { invalid = std.math.maxInt(u64), _ };
+/// Process-lifetime screenshot identity, not a releasable memory owner.
+pub const ScreenshotHandle = enum(u32) { invalid = 0, _ };
 /// SDK image identifier, not a GPU texture or an owned image allocation.
 pub const ImageHandle = enum(i32) { invalid = 0, _ };
 /// Session-scoped leaderboard identity, not a downloaded entry-set owner.

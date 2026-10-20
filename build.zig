@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const sources: []const []const u8 = &.{ "c/core.cpp", "c/networking.cpp", "c/networking_config.cpp", "c/networking_debug.cpp", "c/lobbies.cpp", "c/services.cpp", "c/utils.cpp", "c/input.cpp" };
+const sources: []const []const u8 = &.{ "c/core.cpp", "c/networking.cpp", "c/networking_config.cpp", "c/networking_debug.cpp", "c/lobbies.cpp", "c/services.cpp", "c/utils.cpp", "c/input.cpp", "c/voice.cpp", "c/remote_play.cpp", "c/timeline.cpp", "c/workshop.cpp", "c/screenshots.cpp" };
 const cpp_flags: []const []const u8 = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-Wall", "-Wextra", "-Werror" };
 
 pub fn build(b: *std.Build) void {
@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
     }
     test_step.dependOn(addNetworkingGuards(b, target, optimize, runner, compile_tests));
     test_step.dependOn(addPlatformGuards(b, target, optimize, runner, compile_tests));
+    test_step.dependOn(addCapabilityGuards(b, target, optimize, runner, compile_tests));
     const control = b.addTest(.{ .name = "lifecycle-control", .root_module = module, .filters = &.{"lifecycle control "}, .use_llvm = use_llvm, .use_lld = use_llvm });
     const control_run = b.addRunArtifact(control);
     configureRun(b, control_run, target.result, sdk_path);
@@ -107,6 +108,19 @@ pub fn build(b: *std.Build) void {
     compile_tests.dependOn(&platform_tests.step);
     // The normal suite already executes these tests.
 
+    const capability_tests = b.addTest(.{
+        .name = "capabilities",
+        .root_module = module,
+        .filters = &.{ "capability ", "Voice ", "RemotePlay ", "Timeline ", "Workshop ", "Screenshots " },
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
+    });
+    const capability_run = b.addRunArtifact(capability_tests);
+    configureRun(b, capability_run, target.result, sdk_path);
+    b.step("test-capabilities", "Run offline content, voice, Remote Play and recording Zig tests").dependOn(&capability_run.step);
+    compile_tests.dependOn(&capability_tests.step);
+    // The normal suite already executes these tests.
+
     const fixtures = [_]struct { name: []const u8, source: []const u8, define: []const u8, sdk_link: bool = true }{
         .{ .name = "core", .source = "c/core.cpp", .define = "SW_CORE_TEST" },
         .{ .name = "networking", .source = "c/networking.cpp", .define = "SW_NETWORKING_TEST" },
@@ -116,6 +130,11 @@ pub fn build(b: *std.Build) void {
         .{ .name = "services", .source = "c/services.cpp", .define = "SW_SERVICES_TEST", .sdk_link = false },
         .{ .name = "utils", .source = "c/utils.cpp", .define = "SW_UTILS_TEST", .sdk_link = false },
         .{ .name = "input", .source = "c/input.cpp", .define = "SW_INPUT_TEST", .sdk_link = false },
+        .{ .name = "voice", .source = "c/voice.cpp", .define = "SW_VOICE_TEST", .sdk_link = false },
+        .{ .name = "remote-play", .source = "c/remote_play.cpp", .define = "SW_REMOTE_PLAY_TEST", .sdk_link = false },
+        .{ .name = "timeline", .source = "c/timeline.cpp", .define = "SW_TIMELINE_TEST", .sdk_link = false },
+        .{ .name = "workshop", .source = "c/workshop.cpp", .define = "SW_WORKSHOP_TEST", .sdk_link = false },
+        .{ .name = "screenshots", .source = "c/screenshots.cpp", .define = "SW_SCREENSHOTS_TEST", .sdk_link = false },
     };
     for (fixtures) |fixture| {
         const fixture_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
@@ -267,12 +286,89 @@ fn addPlatformGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: 
     return step;
 }
 
+fn addCapabilityGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
+    const use_llvm: ?bool = if (target.result.os.tag == .linux) true else null;
+    const module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    module.addIncludePath(b.path("c"));
+    module.addCSourceFile(.{ .file = b.path("tests/capability_guards.cpp"), .flags = cpp_flags });
+    const options = b.addOptions();
+    options.addOption(bool, "fatal_lifecycle", true);
+    module.addOptions("steamworkz_test_options", options);
+    const executable = b.addTest(.{
+        .name = "capability-guards",
+        .root_module = module,
+        .filters = &.{"capability fatal guard"},
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
+    });
+    compile_tests.dependOn(&executable.step);
+    const step = b.step("test-capability-guards", "Check capability leases before validation, state and native paths without Steam linkage");
+    const methods = [_][]const u8{
+        "voice_start",                   "voice_start_recording",         "voice_start_draining",
+        "voice_stop_inactive",           "voice_stop_recording",          "voice_stop_draining",
+        "voice_state",                   "voice_available",               "voice_read_empty",
+        "voice_read",                    "voice_decode_rate",             "voice_decode_empty",
+        "voice_decode_overlap",          "voice_decode",                  "voice_rate",
+        "voice_shutdown_inactive",       "voice_shutdown_recording",      "voice_shutdown_draining",
+        "remote_count",                  "remote_index",                  "remote_index_excess",
+        "remote_together_invalid",       "remote_together",               "remote_steam",
+        "remote_guest",                  "remote_name_empty",             "remote_name",
+        "remote_form",                   "remote_resolution",             "remote_ui",
+        "remote_invite_invalid",         "remote_invite_friend",          "remote_invite_guest",
+        "timeline_mode_invalid",         "timeline_mode",                 "timeline_tooltip_invalid",
+        "timeline_tooltip",              "timeline_clear_invalid",        "timeline_clear",
+        "timeline_instant_invalid",      "timeline_instant",              "timeline_completed_invalid",
+        "timeline_completed",            "timeline_start_invalid",        "timeline_start",
+        "timeline_start_full",           "timeline_start_exhausted",      "range_update_invalid",
+        "range_update",                  "range_update_closed",           "range_end_invalid",
+        "range_end",                     "range_end_closed",              "range_cancel",
+        "range_cancel_closed",           "timeline_remove_zero",          "timeline_shutdown_empty",
+        "timeline_shutdown_active",      "workshop_create_empty",         "workshop_create",
+        "workshop_create_busy",          "workshop_create_exhausted",     "query_state",
+        "query_handle",                  "query_count",                   "query_send",
+        "query_send_pending",            "query_read_index",              "query_read_ready",
+        "query_read_pending",            "query_release",                 "query_release_pending",
+        "query_release_failed",          "query_release_stale",           "workshop_observe_empty",
+        "workshop_observe_pending",      "workshop_shutdown_empty",       "workshop_shutdown_active",
+        "workshop_shutdown_pending",     "workshop_shutdown_failed",      "workshop_count",
+        "workshop_subscriptions_empty",  "workshop_subscriptions_excess", "workshop_subscriptions",
+        "workshop_state",                "workshop_install_empty",        "workshop_install",
+        "workshop_progress",             "workshop_download",             "screenshot_rgb_invalid",
+        "screenshot_rgb",                "screenshot_file_invalid",       "screenshot_file",
+        "screenshot_trigger",            "screenshot_hook_enable",        "screenshot_hook_duplicate",
+        "screenshot_hook_disable_empty", "screenshot_hook_disable",       "screenshot_hook_query",
+        "screenshot_shutdown_empty",     "screenshot_shutdown_owned",     "client_voice",
+        "client_remote",                 "client_timeline",               "client_workshop",
+        "client_screenshots",
+    };
+    for (methods) |method| {
+        for ([_]struct { lease: []const u8, diagnostic: []const u8 }{
+            .{ .lease = "closed", .diagnostic = "moved-client" },
+            .{ .lease = "stale", .diagnostic = "stale-lease" },
+            .{ .lease = "foreign", .diagnostic = "wrong-thread" },
+        }) |case| {
+            if (std.mem.eql(u8, case.lease, "stale") and std.mem.startsWith(u8, method, "client_")) continue;
+            const check = b.addRunArtifact(runner);
+            check.step.name = b.fmt("capability guard {s}/{s}", .{ case.lease, method });
+            check.addArgs(&.{ "check", case.diagnostic });
+            check.addArtifactArg(executable);
+            check.setEnvironmentVariable("STEAMWORKZ_GUARD_LEASE", case.lease);
+            check.setEnvironmentVariable("STEAMWORKZ_GUARD_METHOD", method);
+            step.dependOn(&check.step);
+        }
+    }
+    return step;
+}
+
 fn addConsumerTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, sdk: []const u8) *std.Build.Step {
     // Build a separate project through the public dependency recipe. Only
     // installation and compile-fail probes run, never package tests or target binaries.
-    const run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "install", "check-negative", "--build-file" });
+    // Bound nested compiler parallelism independently of the outer build graph.
+    const run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "install", "check-negative", "-j2", "--build-file" });
     run.addFileArg(b.path("tests/consumer/build.zig"));
-    run.addArgs(&.{ "--cache-dir", b.pathFromRoot(b.cache_root.path orelse ".") });
+    // Cache paths are relative to the build process cwd, which this child inherits.
+    // Re-rooting at build.zig is wrong when --build-file names a different directory.
+    run.addArgs(&.{ "--cache-dir", b.cache_root.path orelse "." });
     run.addArgs(&.{ "--global-cache-dir", b.graph.global_cache_root.path orelse "." });
     run.addArgs(&.{
         b.fmt("-Dtarget={s}", .{target.query.zigTriple(b.allocator) catch @panic("OOM")}),

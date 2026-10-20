@@ -15,6 +15,18 @@ cloud_batch_active: u64 = 0,
 leaderboard_download_call: u64 = 0,
 leaderboard_download_blocked: bool = false,
 leaderboard_upload_call: u64 = 0,
+voice_state: enum { inactive, recording, draining } = .inactive,
+timeline_serial: u64 = 0,
+/// Wrapper-owned open ranges only. Closed native markers are not resource owners.
+timeline_ranges: [16]struct { token: u64 = 0, handle: u64 = 0 } = @splat(.{}),
+workshop_serial: u64 = 0,
+workshop_active: u64 = 0,
+workshop_handle: u64 = std.math.maxInt(u64),
+workshop_call: u64 = 0,
+workshop_state: enum { none, created, pending, ready, failed, release_failed } = .none,
+workshop_requested: u32 = 0,
+workshop_returned: u32 = 0,
+screenshot_hook_owned: bool = false,
 
 /// A borrowed interface. The client must remain at its original address.
 pub const Lease = struct {
@@ -146,6 +158,18 @@ test "a renewed session resets optional service ownership" {
     context.leaderboard_download_call = 31;
     context.leaderboard_download_blocked = true;
     context.leaderboard_upload_call = 37;
+    context.voice_state = .draining;
+    context.timeline_serial = 43;
+    context.timeline_ranges[0] = .{ .token = 41, .handle = 0 };
+    context.timeline_ranges[1] = .{ .token = 43, .handle = 47 };
+    context.workshop_serial = 53;
+    context.workshop_active = 53;
+    context.workshop_handle = 0;
+    context.workshop_call = 59;
+    context.workshop_state = .pending;
+    context.workshop_requested = 3;
+    context.workshop_returned = 2;
+    context.screenshot_hook_owned = true;
     const generation = context.generation;
     context.release();
     try context.claim();
@@ -159,6 +183,20 @@ test "a renewed session resets optional service ownership" {
     try std.testing.expectEqual(@as(u64, 0), context.leaderboard_download_call);
     try std.testing.expect(!context.leaderboard_download_blocked);
     try std.testing.expectEqual(@as(u64, 0), context.leaderboard_upload_call);
+    try std.testing.expect(context.voice_state == .inactive);
+    try std.testing.expectEqual(@as(u64, 0), context.timeline_serial);
+    for (context.timeline_ranges) |slot| {
+        try std.testing.expectEqual(@as(u64, 0), slot.token);
+        try std.testing.expectEqual(@as(u64, 0), slot.handle);
+    }
+    try std.testing.expectEqual(@as(u64, 0), context.workshop_serial);
+    try std.testing.expectEqual(@as(u64, 0), context.workshop_active);
+    try std.testing.expectEqual(std.math.maxInt(u64), context.workshop_handle);
+    try std.testing.expectEqual(@as(u64, 0), context.workshop_call);
+    try std.testing.expect(context.workshop_state == .none);
+    try std.testing.expectEqual(@as(u32, 0), context.workshop_requested);
+    try std.testing.expectEqual(@as(u32, 0), context.workshop_returned);
+    try std.testing.expect(!context.screenshot_hook_owned);
 }
 
 test "copied contexts and foreign threads cannot use the active session" {
