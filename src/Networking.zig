@@ -163,6 +163,83 @@ pub const RelayStatus = struct {
     }
 };
 
+/// Steam's maximum configured lane count, not a count discovery mechanism.
+pub const max_lanes = c.SW_NETWORKING_MAX_LANES;
+
+/// Owned snapshot, with signed readings and native floating-point values intact.
+/// No teardown is needed for this value or LaneRealTimeStatus.
+pub const RealTimeStatus = struct {
+    state: State,
+    ping_ms: i32,
+    connection_quality_local: f32,
+    connection_quality_remote: f32,
+    out_packets_per_second: f32,
+    out_bytes_per_second: f32,
+    in_packets_per_second: f32,
+    in_bytes_per_second: f32,
+    send_rate_bytes_per_second: i32,
+    /// Bytes queued for sending, including data waiting for Nagle.
+    pending_unreliable: i32,
+    /// Also includes previously sent bytes scheduled for retransmission.
+    pending_reliable: i32,
+    /// Bytes sent reliably but not yet acknowledged.
+    sent_unacked_reliable: i32,
+    /// Estimate ignoring Nagle delay. Valid only when multiple lanes are NOT used;
+    /// use each lane's queue_time_us when multiple lanes are configured.
+    queue_time_us: i64,
+    /// High-water jitter since the last fetch; negative means unavailable.
+    /// Fetching real-time status clears this native high-water mark.
+    max_jitter_us: i32,
+
+    fn fromNative(value: c.SwConnectionRealTimeStatus) RealTimeStatus {
+        return .{
+            .state = @enumFromInt(value.state),
+            .ping_ms = value.ping_ms,
+            .connection_quality_local = value.connection_quality_local,
+            .connection_quality_remote = value.connection_quality_remote,
+            .out_packets_per_second = value.out_packets_per_second,
+            .out_bytes_per_second = value.out_bytes_per_second,
+            .in_packets_per_second = value.in_packets_per_second,
+            .in_bytes_per_second = value.in_bytes_per_second,
+            .send_rate_bytes_per_second = value.send_rate_bytes_per_second,
+            .pending_unreliable = value.pending_unreliable,
+            .pending_reliable = value.pending_reliable,
+            .sent_unacked_reliable = value.sent_unacked_reliable,
+            .queue_time_us = value.queue_time_us,
+            .max_jitter_us = value.max_jitter_us,
+        };
+    }
+};
+/// Owned per-lane byte counters with the same meaning as RealTimeStatus.
+pub const LaneRealTimeStatus = struct {
+    pending_unreliable: i32,
+    pending_reliable: i32,
+    sent_unacked_reliable: i32,
+    /// Lane estimate accounts for priorities, weights and queued data in all lanes.
+    queue_time_us: i64,
+
+    fn fromNative(value: c.SwLaneRealTimeStatus) LaneRealTimeStatus {
+        return .{
+            .pending_unreliable = value.pending_unreliable,
+            .pending_reliable = value.pending_reliable,
+            .sent_unacked_reliable = value.sent_unacked_reliable,
+            .queue_time_us = value.queue_time_us,
+        };
+    }
+};
+pub const RealTimeStatusOutcome = union(enum) {
+    status: RealTimeStatus,
+    rejected: types.Result,
+};
+pub const DetailedStatusOutcome = union(enum) {
+    /// Borrows caller storage, excluding the terminator. No teardown required.
+    complete: []const u8,
+    /// Required byte capacity, including space for the terminator.
+    required_capacity: usize,
+    failed,
+    unexpected_result: i32,
+};
+
 /// Raw SDK bits for sendRaw. The C++ bridge checks these against SDK headers.
 pub const SendFlags = struct {
     pub const unreliable: i32 = c.SW_SEND_UNRELIABLE;
@@ -206,12 +283,47 @@ pub const SendOutcome = union(enum) {
         return if (value == .ok) .{ .accepted = number } else .{ .rejected = value };
     }
 };
+/// Lower priorities strictly precede higher ones. Weights share bandwidth only
+/// among equal priorities; zero weight is invalid.
+pub const LaneConfig = struct { priority: i32, weight: u16 };
+/// Wrapper bound, not an SDK limit or the receive limit.
+pub const max_send_batch = c.SW_NETWORKING_MAX_SEND_BATCH;
+pub const max_send_size = c.SW_NETWORKING_MAX_SEND_SIZE;
+/// Payload is borrowed only during sendBatch. No buffer or callback is retained.
+pub const BatchSend = struct {
+    connection: Connection,
+    payload: []const u8,
+    lane: u16 = 0,
+    options: SendOptions = .{},
+};
+pub const BatchSendOutcome = union(enum) {
+    /// Local acceptance only; numbers are scoped to connection AND lane.
+    accepted: i64,
+    rejected: types.Result,
+    /// An earlier entry on the same connection failed. No retry is performed.
+    not_attempted,
+    unexpected_result: i64,
+
+    fn fromNative(raw: i64) BatchSendOutcome {
+        if (raw > 0) return .{ .accepted = raw };
+        if (raw == 0) return .not_attempted;
+        // Compare before negation, including INT64_MIN.
+        if (raw >= -@as(i64, std.math.maxInt(i32))) return .{ .rejected = @enumFromInt(@as(i32, @intCast(-raw))) };
+        return .{ .unexpected_result = raw };
+    }
+};
+pub const BatchSendError = error{ TooManyMessages, InsufficientOutcomes, TooLarge, InvalidLane, InvalidSendOptions, Unavailable, AllocationFailed, BridgeFailed };
+
 pub const Metadata = struct {
     connection: Connection,
     peer_steam_id: types.SteamId,
+    /// Message numbers are per lane. Only reliable messages within one lane
+    /// have an ordering guarantee; numbers are not globally unique.
     number: i64,
     received_at: i64,
     channel: i32,
+    /// Raw incoming lane, independent of channel and outgoing wrapper bounds.
+    lane: u16 = 0,
 };
 
 /// Unique owner: do not copy a live Message or move it out of a received batch.
@@ -256,6 +368,7 @@ pub const Message = struct {
                 .number = view.number,
                 .received_at = view.received_at,
                 .channel = view.channel,
+                .lane = view.lane,
             },
         };
     }
@@ -352,12 +465,13 @@ pub fn socketPair(self: Networking, options: SocketPairOptions) error{OperationF
     if (c.sw_networking_socket_pair(&first, &second, @intFromBool(options.network_loopback)) == 0) return error.OperationFailed;
     return .{ @enumFromInt(first), @enumFromInt(second) };
 }
-/// Local errors use Zig errors. Steam rejection retains its Result in the outcome.
+/// Sends on lane zero. Local errors use Zig errors; native rejection retains
+/// its Result in the outcome. Use sendBatch (including one entry) for other lanes.
 pub fn send(self: Networking, connection: Connection, data: []const u8, options: SendOptions) error{ TooLarge, InvalidSendOptions }!SendOutcome {
     self.lease.check();
     return sendMessage(connection, data, try options.flags());
 }
-/// Explicit escape hatch for advanced/future SDK bits. Steam validates raw flags.
+/// Lane-zero escape hatch for advanced/future SDK bits. Steam validates raw flags.
 pub fn sendRaw(self: Networking, connection: Connection, data: []const u8, flags: i32) error{TooLarge}!SendOutcome {
     self.lease.check();
     return sendMessage(connection, data, flags);
@@ -367,6 +481,57 @@ fn sendMessage(connection: Connection, data: []const u8, flags: i32) error{TooLa
     var number: i64 = -1;
     const result = c.sw_networking_send(@intFromEnum(connection), data.ptr, size, flags, &number);
     return SendOutcome.fromNative(result, number);
+}
+/// Configure 1..max_lanes outbound lanes. Native rejects reducing the count and
+/// may reset bandwidth balancing on reconfiguration. No count is cached and
+/// sends never configure lanes automatically.
+pub fn configureLanes(self: Networking, connection: Connection, lanes: []const LaneConfig) error{ InvalidLaneCount, InvalidLaneWeight, Unavailable, BridgeFailed }!types.Result {
+    return self.configureLanesWith(connection, lanes, c.sw_networking_configure_lanes);
+}
+fn configureLanesWith(self: Networking, connection: Connection, lanes: []const LaneConfig, comptime configure: @TypeOf(c.sw_networking_configure_lanes)) error{ InvalidLaneCount, InvalidLaneWeight, Unavailable, BridgeFailed }!types.Result {
+    self.lease.check();
+    if (lanes.len == 0 or lanes.len > max_lanes) return error.InvalidLaneCount;
+    var native: [max_lanes]c.SwLaneConfig = undefined;
+    for (lanes, native[0..lanes.len]) |lane, *out| {
+        if (lane.weight == 0) return error.InvalidLaneWeight;
+        out.* = .{ .priority = lane.priority, .weight = lane.weight };
+    }
+    var result: i32 = undefined;
+    try checkStatusBridge(configure(@intFromEnum(connection), &native, @intCast(lanes.len), &result));
+    return @enumFromInt(result);
+}
+/// Validate all descriptors before any native access, then copy payloads into
+/// SDK-allocated messages and transfer all with one call. Empty payloads use a
+/// one-byte SDK allocation with logical size zero. Pre-transfer errors send
+/// nothing and leave outcomes untouched. No outbound owner escapes this call.
+/// Returns the initialized prefix borrowing caller storage; no teardown needed.
+/// An empty batch is a no-op after checking the lease.
+pub fn sendBatch(self: Networking, messages: []const BatchSend, outcomes: []BatchSendOutcome) BatchSendError![]BatchSendOutcome {
+    return self.sendBatchWith(messages, outcomes, c.sw_networking_send_batch);
+}
+fn sendBatchWith(self: Networking, messages: []const BatchSend, outcomes: []BatchSendOutcome, comptime transfer: @TypeOf(c.sw_networking_send_batch)) BatchSendError![]BatchSendOutcome {
+    self.lease.check();
+    if (messages.len > max_send_batch) return error.TooManyMessages;
+    if (outcomes.len < messages.len) return error.InsufficientOutcomes;
+    if (messages.len == 0) return outcomes[0..0];
+    var native: [max_send_batch]c.SwBatchSend = undefined;
+    for (messages, native[0..messages.len]) |message, *out| {
+        if (message.payload.len > max_send_size) return error.TooLarge;
+        if (message.lane >= max_lanes) return error.InvalidLane;
+        out.* = .{
+            .connection = @intFromEnum(message.connection),
+            .data = message.payload.ptr,
+            .size = @intCast(message.payload.len),
+            .lane = message.lane,
+            .flags = try message.options.flags(),
+        };
+    }
+    var results: [max_send_batch]i64 = undefined;
+    const result = transfer(&native, @intCast(messages.len), &results);
+    if (result == -2) return error.AllocationFailed;
+    try checkStatusBridge(result);
+    for (outcomes[0..messages.len], results[0..messages.len]) |*out, raw| out.* = BatchSendOutcome.fromNative(raw);
+    return outcomes[0..messages.len];
 }
 pub fn flush(self: Networking, connection: Connection) types.Result {
     self.lease.check();
@@ -406,6 +571,52 @@ pub fn connectionInfo(self: Networking, connection: Connection) error{InfoUnavai
     var value: c.SwConnectionInfo = undefined;
     if (c.sw_networking_connection_info(@intFromEnum(connection), &value) == 0) return error.InfoUnavailable;
     return Info.fromNative(value);
+}
+/// Requests exactly lanes.len entries (lane zero onward), including zero or a
+/// prefix. The caller tracks the configured count: requesting more configured
+/// lanes than exist is left to native validation. Outputs are unchanged unless
+/// native returns OK. Fetching this status clears the jitter high-water mark.
+pub fn realTimeStatus(self: Networking, connection: Connection, lanes: []LaneRealTimeStatus) error{ TooManyLanes, Unavailable, BridgeFailed }!RealTimeStatusOutcome {
+    return self.realTimeStatusWith(connection, lanes, c.sw_networking_real_time_status);
+}
+fn realTimeStatusWith(self: Networking, connection: Connection, lanes: []LaneRealTimeStatus, comptime query: @TypeOf(c.sw_networking_real_time_status)) error{ TooManyLanes, Unavailable, BridgeFailed }!RealTimeStatusOutcome {
+    self.lease.check();
+    if (lanes.len > max_lanes) return error.TooManyLanes;
+    var value: c.SwConnectionRealTimeStatus = undefined;
+    var native_lanes: [max_lanes]c.SwLaneRealTimeStatus = undefined;
+    var result: i32 = undefined;
+    try checkStatusBridge(query(@intFromEnum(connection), &value, if (lanes.len == 0) null else &native_lanes, @intCast(lanes.len), &result));
+    const native_result: types.Result = @enumFromInt(result);
+    if (native_result != .ok) return .{ .rejected = native_result };
+    for (lanes, native_lanes[0..lanes.len]) |*lane, native_lane| lane.* = LaneRealTimeStatus.fromNative(native_lane);
+    return .{ .status = RealTimeStatus.fromNative(value) };
+}
+/// Caller-storage-only text. Empty storage queries with null/zero. The SDK may
+/// modify/truncate a short buffer: no untouched-buffer guarantee is made.
+/// Retry with the reported capacity; status can change between calls.
+pub fn detailedStatus(self: Networking, connection: Connection, buffer: []u8) error{ BufferTooLarge, Unavailable, BridgeFailed, UnterminatedStatus }!DetailedStatusOutcome {
+    return self.detailedStatusWith(connection, buffer, c.sw_networking_detailed_status);
+}
+fn detailedStatusWith(self: Networking, connection: Connection, buffer: []u8, comptime query: @TypeOf(c.sw_networking_detailed_status)) error{ BufferTooLarge, Unavailable, BridgeFailed, UnterminatedStatus }!DetailedStatusOutcome {
+    self.lease.check();
+    const capacity = try detailedStatusCapacity(buffer.len);
+    var result: i32 = undefined;
+    try checkStatusBridge(query(@intFromEnum(connection), if (buffer.len == 0) null else buffer.ptr, capacity, &result));
+    if (result == -1) return .failed;
+    if (result < -1) return .{ .unexpected_result = result };
+    if (result > 0) return .{ .required_capacity = @intCast(result) };
+    const end = std.mem.indexOfScalar(u8, buffer, 0) orelse return error.UnterminatedStatus;
+    return .{ .complete = buffer[0..end] };
+}
+fn detailedStatusCapacity(length: usize) error{BufferTooLarge}!c_int {
+    return std.math.cast(c_int, length) orelse error.BufferTooLarge;
+}
+fn checkStatusBridge(result: c_int) error{ Unavailable, BridgeFailed }!void {
+    switch (result) {
+        1 => {},
+        0 => return error.Unavailable,
+        else => return error.BridgeFailed,
+    }
 }
 pub fn listenAddress(self: Networking, socket: ListenSocket) error{AddressUnavailable}!Address {
     self.lease.check();
@@ -673,4 +884,331 @@ test "property Address bounded arbitrary strings and malformed numeric mutations
             try std.testing.expectError(error.InvalidAddress, Address.parse(try std.fmt.bufPrint(&buffer, pattern, .{index})));
         }
     }
+}
+
+test "realTimeStatus copies all fields preserving signed readings and float bits" {
+    const native: c.SwConnectionRealTimeStatus = .{
+        .state = 12345,
+        .ping_ms = -11,
+        .connection_quality_local = @bitCast(@as(u32, 0x80000000)),
+        .connection_quality_remote = @bitCast(@as(u32, 0x7fc12345)),
+        .out_packets_per_second = @bitCast(@as(u32, 0x7f800000)),
+        .out_bytes_per_second = @bitCast(@as(u32, 0xff800000)),
+        .in_packets_per_second = @bitCast(@as(u32, 1)),
+        .in_bytes_per_second = -29.5,
+        .send_rate_bytes_per_second = -31,
+        .pending_unreliable = -41,
+        .pending_reliable = 43,
+        .sent_unacked_reliable = -47,
+        .queue_time_us = std.math.minInt(i64) + 53,
+        .max_jitter_us = -59,
+    };
+    const status = RealTimeStatus.fromNative(native);
+    try std.testing.expectEqual(@as(i32, 12345), @intFromEnum(status.state));
+    inline for (std.meta.fields(RealTimeStatus)) |field| {
+        if (field.type == f32) {
+            try std.testing.expectEqual(@as(u32, @bitCast(@field(native, field.name))), @as(u32, @bitCast(@field(status, field.name))));
+        } else if (field.type != State) {
+            try std.testing.expectEqual(@field(native, field.name), @field(status, field.name));
+        }
+    }
+    const lane = LaneRealTimeStatus.fromNative(.{
+        .pending_unreliable = -61,
+        .pending_reliable = 67,
+        .sent_unacked_reliable = -71,
+        .queue_time_us = std.math.maxInt(i64) - 73,
+    });
+    try std.testing.expectEqualDeep(LaneRealTimeStatus{
+        .pending_unreliable = -61,
+        .pending_reliable = 67,
+        .sent_unacked_reliable = -71,
+        .queue_time_us = std.math.maxInt(i64) - 73,
+    }, lane);
+}
+
+test "realTimeStatus zero prefix maximum and rejections commit only native success" {
+    const Fixture = struct {
+        var calls: usize = 0;
+        var count: c_int = 0;
+        var bridge: c_int = 1;
+        var result: i32 = 1;
+        fn query(connection: u32, status: [*c]c.SwConnectionRealTimeStatus, lanes: [*c]c.SwLaneRealTimeStatus, lane_count: c_int, native_result: [*c]i32) callconv(.c) c_int {
+            std.testing.expect(connection == 79 and lane_count == count) catch @panic("telemetry arguments");
+            std.testing.expect(if (count == 0) lanes == null else lanes != null) catch @panic("telemetry lane pointer");
+            calls += 1;
+            // Even a badly behaved bridge must not leak failed outputs to callers.
+            status.* = std.mem.zeroes(c.SwConnectionRealTimeStatus);
+            status.*.state = 12345;
+            for (0..@intCast(lane_count)) |i| lanes[i] = .{
+                .pending_unreliable = -100 - @as(i32, @intCast(i)),
+                .pending_reliable = 200 + @as(i32, @intCast(i)),
+                .sent_unacked_reliable = -300 - @as(i32, @intCast(i)),
+                .queue_time_us = std.math.maxInt(i64) - @as(i64, @intCast(i)),
+            };
+            native_result.* = result;
+            return bridge;
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    const networking: Networking = .{ .lease = context.lease() };
+    const sentinel: LaneRealTimeStatus = .{ .pending_unreliable = 1, .pending_reliable = 2, .sent_unacked_reliable = 3, .queue_time_us = 4 };
+    var lanes: [max_lanes + 1]LaneRealTimeStatus = @splat(sentinel);
+    for ([_]usize{ 0, 1, 3, max_lanes }) |count| {
+        @memset(&lanes, sentinel);
+        Fixture.count = @intCast(count);
+        const result = try networking.realTimeStatusWith(@enumFromInt(79), lanes[0..count], Fixture.query);
+        try std.testing.expectEqual(@as(i32, 12345), @intFromEnum(result.status.state));
+        for (lanes[0..count], 0..) |lane, i| {
+            try std.testing.expectEqualDeep(LaneRealTimeStatus{
+                .pending_unreliable = -100 - @as(i32, @intCast(i)),
+                .pending_reliable = 200 + @as(i32, @intCast(i)),
+                .sent_unacked_reliable = -300 - @as(i32, @intCast(i)),
+                .queue_time_us = std.math.maxInt(i64) - @as(i64, @intCast(i)),
+            }, lane);
+        }
+        for (lanes[count..]) |lane| try std.testing.expectEqualDeep(sentinel, lane);
+    }
+    const saved = lanes;
+    Fixture.count = 3;
+    for ([_]i32{ @intFromEnum(types.Result.no_connection), @intFromEnum(types.Result.invalid_parameter), 123456, -123456 }) |result| {
+        Fixture.result = result;
+        try std.testing.expectEqual(result, @intFromEnum((try networking.realTimeStatusWith(@enumFromInt(79), lanes[0..3], Fixture.query)).rejected));
+        try std.testing.expectEqualDeep(saved, lanes);
+    }
+    Fixture.bridge = 0;
+    try std.testing.expectError(error.Unavailable, networking.realTimeStatusWith(@enumFromInt(79), lanes[0..3], Fixture.query));
+    Fixture.bridge = -1;
+    try std.testing.expectError(error.BridgeFailed, networking.realTimeStatusWith(@enumFromInt(79), lanes[0..3], Fixture.query));
+    try std.testing.expectEqualDeep(saved, lanes);
+    const calls = Fixture.calls;
+    try std.testing.expectError(error.TooManyLanes, networking.realTimeStatusWith(@enumFromInt(79), &lanes, Fixture.query));
+    // The actual public entry point must also reject before resolving Steam.
+    try std.testing.expectError(error.TooManyLanes, networking.realTimeStatus(.invalid, &lanes));
+    try std.testing.expectEqual(calls, Fixture.calls);
+    try std.testing.expectEqualDeep(saved, lanes);
+}
+
+test "detailedStatus caller storage query completion truncation and raw failures" {
+    const Fixture = struct {
+        var bridge: c_int = 1;
+        var result: i32 = 4;
+        var capacity: c_int = 0;
+        var terminate: bool = true;
+        fn query(connection: u32, buffer: [*c]u8, length: c_int, native_result: [*c]i32) callconv(.c) c_int {
+            std.testing.expect(connection == 79 and length == capacity) catch @panic("text arguments");
+            std.testing.expect(if (length == 0) buffer == null else buffer != null) catch @panic("text buffer pointer");
+            if (bridge != 1) return bridge;
+            native_result.* = result;
+            if (length > 0) {
+                const bytes = buffer[0..@intCast(length)];
+                @memset(bytes, 'x');
+                if (terminate) bytes[bytes.len - 1] = 0;
+            }
+            return 1;
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    const networking: Networking = .{ .lease = context.lease() };
+    var buffer = [_]u8{ 'a', 'b', 'c', 'd', '!' };
+    const connection: Connection = @enumFromInt(79);
+    try std.testing.expectEqual(@as(usize, 4), (try networking.detailedStatusWith(connection, buffer[0..0], Fixture.query)).required_capacity);
+    Fixture.capacity = 4;
+    Fixture.result = 0;
+    const complete = (try networking.detailedStatusWith(connection, buffer[0..4], Fixture.query)).complete;
+    try std.testing.expectEqualStrings("xxx", complete);
+    try std.testing.expect(complete.ptr == &buffer);
+    try std.testing.expectEqual(@as(u8, '!'), buffer[4]);
+    buffer[0] = 'b';
+    try std.testing.expectEqual(@as(u8, 'b'), complete[0]); // Borrowed, not copied.
+    Fixture.capacity = 2;
+    Fixture.result = 4;
+    try std.testing.expectEqual(@as(usize, 4), (try networking.detailedStatusWith(connection, buffer[0..2], Fixture.query)).required_capacity);
+    try std.testing.expectEqualSlices(u8, "x\x00x\x00!", &buffer);
+    Fixture.terminate = false;
+    _ = try networking.detailedStatusWith(connection, buffer[0..2], Fixture.query);
+    try std.testing.expectEqualStrings("xx", buffer[0..2]); // Short buffers need not terminate.
+    Fixture.result = -1;
+    try std.testing.expectEqual(DetailedStatusOutcome.failed, try networking.detailedStatusWith(connection, buffer[0..2], Fixture.query));
+    for ([_]i32{ -2, -71, std.math.minInt(i32) }) |raw| {
+        Fixture.result = raw;
+        try std.testing.expectEqual(raw, (try networking.detailedStatusWith(connection, buffer[0..2], Fixture.query)).unexpected_result);
+    }
+    Fixture.result = std.math.maxInt(i32);
+    try std.testing.expectEqual(@as(usize, std.math.maxInt(i32)), (try networking.detailedStatusWith(connection, buffer[0..2], Fixture.query)).required_capacity);
+    Fixture.result = 0;
+    // A terminator exists just past this slice: it must not be read.
+    buffer[2] = 0;
+    try std.testing.expectError(error.UnterminatedStatus, networking.detailedStatusWith(connection, buffer[0..2], Fixture.query));
+    Fixture.capacity = 0;
+    try std.testing.expectError(error.UnterminatedStatus, networking.detailedStatusWith(connection, buffer[0..0], Fixture.query));
+    Fixture.capacity = 1;
+    Fixture.terminate = true;
+    try std.testing.expectEqualStrings("", (try networking.detailedStatusWith(connection, buffer[0..1], Fixture.query)).complete);
+    Fixture.bridge = 0;
+    try std.testing.expectError(error.Unavailable, networking.detailedStatusWith(connection, buffer[0..1], Fixture.query));
+    Fixture.bridge = -1;
+    try std.testing.expectError(error.BridgeFailed, networking.detailedStatusWith(connection, buffer[0..1], Fixture.query));
+    try std.testing.expectEqual(@as(c_int, std.math.maxInt(c_int)), try detailedStatusCapacity(std.math.maxInt(c_int)));
+    try std.testing.expectError(error.BufferTooLarge, detailedStatusCapacity(@as(usize, std.math.maxInt(c_int)) + 1));
+    try std.testing.expectError(error.BufferTooLarge, detailedStatusCapacity(std.math.maxInt(usize)));
+}
+
+test "configureLanes validates before native and preserves full priorities weights and results" {
+    const Fixture = struct {
+        var calls: usize = 0;
+        var bridge: c_int = 1;
+        var result: i32 = 1;
+        fn configure(connection: u32, lanes: [*c]const c.SwLaneConfig, count: c_int, out: [*c]i32) callconv(.c) c_int {
+            std.testing.expectEqual(@as(u32, 0), connection) catch @panic("connection");
+            for (0..@intCast(count)) |i| {
+                std.testing.expectEqual(@as(i32, if (i % 2 == 0) std.math.minInt(i32) else std.math.maxInt(i32)), lanes[i].priority) catch @panic("priority");
+                std.testing.expectEqual(@as(u16, if (i % 2 == 0) 1 else 65535), lanes[i].weight) catch @panic("weight");
+            }
+            calls += 1;
+            out.* = result;
+            return bridge;
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    const networking: Networking = .{ .lease = context.lease() };
+    var lanes: [max_lanes + 1]LaneConfig = undefined;
+    for (&lanes, 0..) |*lane, i| lane.* = .{ .priority = if (i % 2 == 0) std.math.minInt(i32) else std.math.maxInt(i32), .weight = if (i % 2 == 0) 1 else 65535 };
+    for ([_]usize{ 1, max_lanes }) |count| {
+        try std.testing.expectEqual(types.Result.ok, try networking.configureLanesWith(.invalid, lanes[0..count], Fixture.configure));
+    }
+    for ([_]i32{ 8, 3, 255, std.math.maxInt(i32), std.math.minInt(i32) }) |result| {
+        Fixture.result = result;
+        try std.testing.expectEqual(result, @intFromEnum(try networking.configureLanesWith(.invalid, lanes[0..1], Fixture.configure)));
+    }
+    Fixture.bridge = 0;
+    try std.testing.expectError(error.Unavailable, networking.configureLanesWith(.invalid, lanes[0..1], Fixture.configure));
+    Fixture.bridge = -1;
+    try std.testing.expectError(error.BridgeFailed, networking.configureLanesWith(.invalid, lanes[0..1], Fixture.configure));
+    const calls = Fixture.calls;
+    try std.testing.expectError(error.InvalidLaneCount, networking.configureLanes(.invalid, &.{}));
+    try std.testing.expectError(error.InvalidLaneCount, networking.configureLanes(.invalid, &lanes));
+    lanes[max_lanes - 1].weight = 0;
+    try std.testing.expectError(error.InvalidLaneWeight, networking.configureLanesWith(.invalid, lanes[0..max_lanes], Fixture.configure));
+    try std.testing.expectEqual(calls, Fixture.calls);
+}
+
+test "sendBatch validates the whole batch and publishes only transferred outcomes" {
+    const Fixture = struct {
+        var calls: usize = 0;
+        var bridge: c_int = 1;
+        const raw = [_]i64{ 71, -8, 0, 73, -255, std.math.maxInt(i64), std.math.minInt(i64), -2147483648, -2147483647 };
+        fn transfer(messages: [*c]const c.SwBatchSend, count: c_int, results: [*c]i64) callconv(.c) c_int {
+            calls += 1;
+            for (0..@intCast(count)) |i| {
+                std.testing.expectEqual(@as(u32, @intCast(if (i % 9 == 1 or i % 9 == 2) 0 else i + 1)), messages[i].connection) catch @panic("connection");
+                std.testing.expectEqual(@as(u16, if (i % 2 == 0) 254 else 0), messages[i].lane) catch @panic("lane");
+                std.testing.expectEqual(@as(i32, if (i % 2 == 0) SendFlags.reliable | SendFlags.no_nagle else SendFlags.no_delay | SendFlags.use_current_thread), messages[i].flags) catch @panic("flags");
+                const payload: []const u8 = if (i % 2 == 0) "copy me" else "";
+                std.testing.expectEqualStrings(payload, messages[i].data[0..messages[i].size]) catch @panic("payload");
+                results[i] = raw[i % raw.len]; // Even failed bridge output must stay private.
+            }
+            return bridge;
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    const networking: Networking = .{ .lease = context.lease() };
+    var messages: [max_send_batch + 1]BatchSend = undefined;
+    for (&messages, 0..) |*message, i| message.* = .{
+        .connection = @enumFromInt(if (i % 9 == 1 or i % 9 == 2) 0 else i + 1),
+        .payload = if (i % 2 == 0) "copy me" else "",
+        .lane = if (i % 2 == 0) 254 else 0,
+        .options = if (i % 2 == 0) .{ .reliability = .reliable, .no_nagle = true } else .{ .no_delay = true, .use_current_thread = true },
+    };
+    const sentinel: BatchSendOutcome = .{ .unexpected_result = -987 };
+    var outcomes: [max_send_batch + 1]BatchSendOutcome = @splat(sentinel);
+    const empty = try networking.sendBatch(&.{}, &outcomes);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+    try std.testing.expect(empty.ptr == &outcomes);
+    try std.testing.expectEqual(@as(usize, 0), Fixture.calls);
+    for ([_]usize{ 1, max_send_batch }) |count| {
+        const initialized = try networking.sendBatchWith(messages[0..count], &outcomes, Fixture.transfer);
+        try std.testing.expect(initialized.ptr == &outcomes and initialized.len == count);
+        for (initialized, 0..) |outcome, i| try std.testing.expectEqualDeep(BatchSendOutcome.fromNative(Fixture.raw[i % Fixture.raw.len]), outcome);
+        try std.testing.expectEqualDeep(sentinel, outcomes[count]);
+    }
+    try std.testing.expectEqual(@as(i64, 71), outcomes[0].accepted);
+    try std.testing.expectEqual(@as(i32, 8), @intFromEnum(outcomes[1].rejected));
+    try std.testing.expectEqual(BatchSendOutcome.not_attempted, outcomes[2]);
+    try std.testing.expectEqual(@as(i64, 73), outcomes[3].accepted);
+    try std.testing.expectEqual(@as(i32, 255), @intFromEnum(outcomes[4].rejected));
+    try std.testing.expectEqual(std.math.maxInt(i64), outcomes[5].accepted);
+    try std.testing.expectEqual(std.math.minInt(i64), outcomes[6].unexpected_result);
+    try std.testing.expectEqual(@as(i64, -2147483648), outcomes[7].unexpected_result);
+    try std.testing.expectEqual(std.math.maxInt(i32), @intFromEnum(outcomes[8].rejected));
+    const saved = outcomes;
+    for ([_]c_int{ -2, 0, -1 }) |bridge| {
+        Fixture.bridge = bridge;
+        const expected = switch (bridge) {
+            -2 => error.AllocationFailed,
+            0 => error.Unavailable,
+            else => error.BridgeFailed,
+        };
+        try std.testing.expectError(expected, networking.sendBatchWith(messages[0..max_send_batch], &outcomes, Fixture.transfer));
+        try std.testing.expectEqualDeep(saved, outcomes);
+    }
+    const calls = Fixture.calls;
+    try std.testing.expectError(error.TooManyMessages, networking.sendBatch(&messages, &outcomes));
+    try std.testing.expectError(error.InsufficientOutcomes, networking.sendBatch(messages[0..max_send_batch], outcomes[0 .. max_send_batch - 1]));
+    const last = &messages[max_send_batch - 1];
+    const valid = last.*;
+    last.lane = 255;
+    try std.testing.expectError(error.InvalidLane, networking.sendBatchWith(messages[0..max_send_batch], &outcomes, Fixture.transfer));
+    last.lane = 65535;
+    try std.testing.expectError(error.InvalidLane, networking.sendBatch(messages[0..max_send_batch], &outcomes));
+    last.* = valid;
+    var large: [max_send_size + 1]u8 = undefined;
+    last.payload = &large;
+    try std.testing.expectError(error.TooLarge, networking.sendBatchWith(messages[0..max_send_batch], &outcomes, Fixture.transfer));
+    last.* = valid;
+    last.options = .{ .reliability = .reliable, .no_delay = true };
+    try std.testing.expectError(error.InvalidSendOptions, networking.sendBatchWith(messages[0..max_send_batch], &outcomes, Fixture.transfer));
+    try std.testing.expectEqual(calls, Fixture.calls);
+    try std.testing.expectEqualDeep(saved, outcomes);
+    try std.testing.expectEqual(@as(usize, 0), context.messages);
+}
+
+test "Metadata copies raw incoming lanes without changing received ownership" {
+    const Fixture = struct {
+        var releases: usize = 0;
+        fn release(handle: [*c]?*c.SwMessage) callconv(.c) void {
+            releases += 1;
+            handle.* = null;
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    var token: u8 = 0;
+    for ([_]u16{ 1, 254, 65535 }) |lane| {
+        var view = std.mem.zeroes(c.SwMessageView);
+        view.handle = @ptrCast(&token);
+        view.lane = lane;
+        view.channel = 17;
+        view.number = 23;
+        try Message.validate(view);
+        var message = Message.adopt(context.lease(), view);
+        defer message.releaseWith(Fixture.release);
+        view.lane = 0;
+        try std.testing.expectEqual(lane, message.metadata.lane);
+        try std.testing.expectEqual(@as(i32, 17), message.metadata.channel);
+        try std.testing.expectEqual(@as(i64, 23), message.metadata.number);
+        try std.testing.expectEqual(@as(usize, 1), context.messages);
+        message.releaseWith(Fixture.release);
+        message.releaseWith(Fixture.release);
+        try std.testing.expectEqual(@as(usize, 0), context.messages);
+    }
+    try std.testing.expectEqual(@as(usize, 3), Fixture.releases);
 }

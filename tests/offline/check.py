@@ -15,10 +15,12 @@ PACKAGE_FILES = frozenset("""
 build.zig build.zig.zon README.md LICENSE ROADMAP.md CHECKPOINT.md
 c/core.cpp c/core.h c/networking.cpp c/networking.h c/lobbies.cpp c/lobbies.h
 c/services.cpp c/services.h c/types.h
-src/Client.zig src/Context.zig src/Networking.zig src/Lobbies.zig src/events.zig
+c/networking_config.cpp c/networking_config.h c/networking_debug.cpp c/networking_debug.h
+src/Client.zig src/Context.zig src/Networking.zig src/NetworkingConfig.zig src/NetworkingDebug.zig
+src/Lobbies.zig src/events.zig
 src/native.zig src/requests.zig src/root.zig src/services.zig src/types.zig
-examples/smoke.zig tests/lifecycle_runner.zig
-tests/consumer/build.zig tests/consumer/build.zig.zon tests/consumer/main.zig
+examples/smoke.zig tests/lifecycle_runner.zig tests/networking_guards.cpp
+tests/consumer/build.zig tests/consumer/build.zig.zon tests/consumer/main.zig tests/consumer/no_debug.zig
 tests/consumer/invalid_request.zig tests/consumer/invalid_image.zig
 tests/offline/check.py tests/offline/README.md
 """.split())
@@ -213,8 +215,12 @@ def main():
         "--prefix", str(evidence / "relocated-install")], relocated)
     consumer = evidence / "consumer"
     consumer.mkdir()
-    for name in ("build.zig", "build.zig.zon", "main.zig", "invalid_request.zig", "invalid_image.zig"):
-        data = package["tests/consumer/" + name]
+    # Copy every consumer source from the already validated exact allowlist.
+    # A second handwritten filename list could omit a new linkage fixture.
+    for path, data in sorted(package.items()):
+        if not path.startswith("tests/consumer/"):
+            continue
+        name = path.removeprefix("tests/consumer/")
         if name == "build.zig.zon":
             old = b'.path = "../.."'
             require(data.count(old) == 1, "consumer dependency recipe changed")
@@ -231,7 +237,7 @@ def main():
         require((evidence / install / "bin" / runtime_name).read_bytes() == runtime, "installed runtime mismatch")
     if args.run_consumer:
         # main.zig is maintained as a pure value-only entry point. Its retained
-        # native-backed export is deliberately uncalled; review this before use.
+        # native-backed exports are deliberately uncalled; review them before use.
         clean_env = env.copy()
         for key in ("DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "LD_LIBRARY_PATH", "SteamAppId", "SteamGameId", "STEAMWORKS_SDK"):
             clean_env.pop(key, None)

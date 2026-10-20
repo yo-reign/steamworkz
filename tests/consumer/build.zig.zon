@@ -4,5 +4,5 @@
     .fingerprint = 0x295e56848c2e3165,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{ .steamworkz = .{ .path = "../.." } },
-    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "invalid_request.zig", "invalid_image.zig" },
+    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "no_debug.zig", "invalid_request.zig", "invalid_image.zig" },
 }

@@ -4,6 +4,14 @@
 
 pub const Client = @import("Client.zig");
 pub const Networking = @import("Networking.zig");
+pub const NetworkingConfig = @import("NetworkingConfig.zig");
+const networking_debug = @import("NetworkingDebug.zig");
+pub const NetworkingDebug = networking_debug.Capture;
+// Analyze the required C-ABI sink even when no caller starts capture.
+// This does not register a native callback or initialize an interface.
+comptime {
+    _ = networking_debug;
+}
 pub const Lobbies = @import("Lobbies.zig");
 pub const Friends = @import("services.zig").Friends;
 pub const Apps = @import("services.zig").Apps;
@@ -29,5 +37,7 @@ test {
     _ = @import("services.zig");
     _ = Client;
     _ = Networking;
+    _ = NetworkingConfig;
+    _ = networking_debug;
     _ = Lobbies;
 }

@@ -13,14 +13,17 @@ zig build test-core -Dsdk="$STEAMWORKS_SDK"
 zig build test-services -Dsdk="$STEAMWORKS_SDK"
 zig build test-lifecycle -Dsdk="$STEAMWORKS_SDK"
 zig build test-properties -Dsdk="$STEAMWORKS_SDK"
+zig build test-networking-tools -Dsdk="$STEAMWORKS_SDK"
+zig build test-networking-config test-networking-debug -Dsdk="$STEAMWORKS_SDK"
+zig build test-networking-guards -Dsdk="$STEAMWORKS_SDK"
 zig build test-consumer -Dsdk="$STEAMWORKS_SDK"
 zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast
 ```
 
-- `test` runs the normal Zig suite (including deterministic properties), four
-  native fixtures, lifecycle runner self-tests, five separately filtered fatal
-  checks, and the independent consumer compile/link/install and negative probes.
-  The normal suite deliberately skips five fatal bodies. The separate lifecycle
+- `test` runs the normal Zig suite (including deterministic properties), six
+  native fixtures, lifecycle runner self-tests, five original fatal checks,
+  networking guards, and the independent consumer install/negative probes.
+  The normal suite deliberately skips six fatal bodies. The separate lifecycle
   control repeats the passing lifecycle test (and the root discovery test).
 - `test-core` exercises 948 bounded acquired-callback cases. `test-services`
   exercises five service groups with every SDK entry/accessor substituted; it
@@ -32,18 +35,34 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
   total deadlines. It is for these owned non-descendant-spawning tests, not a
   hostile process-tree sandbox. Runtime lookup is passed to runner and children.
 - `test-properties` filters the normal, nonfatal Zig tests by `property `.
+- `test-networking-tools` filters telemetry/text, configuration/simulation,
+  diagnostic capture, lanes/batch and the Client shutdown-ordering test.
+  `test-networking-config` and `test-networking-debug` link their C++ fixtures
+  without Steam or a C++ runtime library; all native entry points are substituted.
+- `test-networking-guards` reuses the same bounded Zig runner. One SDK-free test
+  executable serves 24 method/input selections across closed, stale and foreign
+  leases (72 checks per mode). Private environment variables select each child
+  case. Owning-file helpers stay private. Bridge stubs abort if reached, so a
+  broken guard cannot call Steam or pass as the required lease panic. Normal
+  return/local validation failure also cannot pass. No second process runner or
+  Python dependency was added.
 - `test-consumer` builds a separate dependency project with the consumer's default
   compiler/linker selection; it does not run its executable or recurse into
   dependency tests. Target, CPU model/features, optimization and explicit SDK
-  propagate. An uncalled exported native-backed method forces real linkage.
+  propagate. Uncalled initialization/shutdown/networking exports retain real
+  production paths, including a reachable ownership transition. They are not
+  application recipes and must remain unexecuted. A second no-capture consumer
+  forces the real C++ registration symbol to survive dead stripping, which checks
+  the required Zig sink without starting capture. Both consumers are install-only.
   Positive code checks typed handles, unknown values, address round-trip and
   request completion semantics. `check-negative` in that project expects
   `Request(.overlay)` to fail with `This event does not complete an exposed
   API-call request` and implicit integer-to-`ImageHandle` to fail with
   `expected type 'types.ImageHandle', found 'comptime_int'`. Unrelated SDK/build
   failures cannot satisfy those diagnostics; positive installation must also pass.
-- `test-compile` builds the normal/control/property tests, five enabled fatal
-  artifacts, target runner, four fixtures and independent consumer/probes without
+- `test-compile` builds normal/control/property/networking tests, five original
+  fatal artifacts, the SDK-free guard artifact, target runner, six fixtures and
+  independent consumer/probes without
   running target programs. It invokes a host Zig build process for the consumer,
   not a target executable. It does not install/run the smoke example.
 - Plain `zig build install` compiles/installs the smoke example and official
@@ -59,7 +78,7 @@ an x86_64 target. Compile/link is not non-host runtime evidence.
 Python **3.9+ standard library only**, Git, Zig 0.16.0 and the external SDK are
 required. Python is never invoked by ordinary Zig build/test/consumer steps.
 Inspect `tests/consumer/main.zig` before opting into execution: its main uses only
-pure value APIs; the retained native-backed export must remain uncalled.
+pure value APIs; all retained native-backed exports must remain uncalled.
 
 ```sh
 python3 tests/offline/check.py --self-test

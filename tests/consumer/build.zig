@@ -34,6 +34,16 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
     steamworkz_build.installRuntime(b, target.result, sdk);
 
+    const no_debug = b.addExecutable(.{
+        .name = "steamworkz-no-debug",
+        .root_module = b.createModule(.{ .root_source_file = b.path("no_debug.zig"), .target = target, .optimize = optimize }),
+    });
+    no_debug.root_module.addImport("steamworkz", module);
+    // Prevent dead stripping from concealing a missing required callback sink.
+    // This does not call the function or require any game to start capture.
+    no_debug.forceUndefinedSymbol(if (target.result.os.tag == .macos) "_sw_networking_debug_start" else "sw_networking_debug_start");
+    b.installArtifact(no_debug);
+
     const negative = b.step("check-negative", "Verify public API misuse fails with the intended diagnostics");
     for ([_]struct { source: []const u8, diagnostic: []const u8 }{
         .{ .source = "invalid_request.zig", .diagnostic = "error: This event does not complete an exposed API-call request" },

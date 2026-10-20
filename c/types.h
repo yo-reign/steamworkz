@@ -30,5 +30,6 @@ typedef struct SwMessageView {
     int64_t number;
     int64_t received_at;
     int32_t channel;
+    uint16_t lane; /* Incoming lane; message numbers are scoped to each lane. */
 } SwMessageView;
 #endif

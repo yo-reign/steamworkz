@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const sources: []const []const u8 = &.{ "c/core.cpp", "c/networking.cpp", "c/lobbies.cpp", "c/services.cpp" };
+const sources: []const []const u8 = &.{ "c/core.cpp", "c/networking.cpp", "c/networking_config.cpp", "c/networking_debug.cpp", "c/lobbies.cpp", "c/services.cpp" };
 const cpp_flags: []const []const u8 = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-Wall", "-Wextra", "-Werror" };
 
 pub fn build(b: *std.Build) void {
@@ -67,6 +67,7 @@ pub fn build(b: *std.Build) void {
         configureRun(b, check, target.result, sdk_path);
         lifecycle.dependOn(&check.step);
     }
+    test_step.dependOn(addNetworkingGuards(b, target, optimize, runner, compile_tests));
     const control = b.addTest(.{ .name = "lifecycle-control", .root_module = module, .filters = &.{"lifecycle control "}, .use_llvm = use_llvm, .use_lld = use_llvm });
     const control_run = b.addRunArtifact(control);
     configureRun(b, control_run, target.result, sdk_path);
@@ -79,16 +80,31 @@ pub fn build(b: *std.Build) void {
     compile_tests.dependOn(&properties.step);
     // Properties already run in the ordinary unfiltered suite.
 
-    const fixtures = [_]struct { name: []const u8, source: []const u8, define: []const u8 }{
+    const networking_tests = b.addTest(.{
+        .name = "networking-tools",
+        .root_module = module,
+        .filters = &.{ "realTimeStatus ", "detailedStatus ", "NetworkingConfig ", "NetworkingDebug ", "configureLanes ", "sendBatch ", "Metadata copies ", "client shutdown disables diagnostics " },
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
+    });
+    const networking_run = b.addRunArtifact(networking_tests);
+    configureRun(b, networking_run, target.result, sdk_path);
+    b.step("test-networking-tools", "Run offline networking tooling and traffic-control Zig tests").dependOn(&networking_run.step);
+    compile_tests.dependOn(&networking_tests.step);
+    // These tests already run in the ordinary unfiltered suite.
+
+    const fixtures = [_]struct { name: []const u8, source: []const u8, define: []const u8, sdk_link: bool = true }{
         .{ .name = "core", .source = "c/core.cpp", .define = "SW_CORE_TEST" },
         .{ .name = "networking", .source = "c/networking.cpp", .define = "SW_NETWORKING_TEST" },
+        .{ .name = "networking-config", .source = "c/networking_config.cpp", .define = "SW_NETWORKING_CONFIG_TEST", .sdk_link = false },
+        .{ .name = "networking-debug", .source = "c/networking_debug.cpp", .define = "SW_NETWORKING_DEBUG_TEST", .sdk_link = false },
         .{ .name = "lobbies", .source = "c/lobbies.cpp", .define = "SW_LOBBIES_TEST" },
-        .{ .name = "services", .source = "c/services.cpp", .define = "SW_SERVICES_TEST" },
+        .{ .name = "services", .source = "c/services.cpp", .define = "SW_SERVICES_TEST", .sdk_link = false },
     };
     for (fixtures) |fixture| {
         const fixture_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
-        // Services substitutes every SDK invocation: missed substitutions must fail to link.
-        if (std.mem.eql(u8, fixture.name, "services"))
+        // Fully substituted fixtures must fail to link if a native call escapes.
+        if (!fixture.sdk_link)
             configureIncludes(b, fixture_module, sdk_path)
         else
             configureModule(b, fixture_module, sdk_path, runtime);
@@ -119,6 +135,53 @@ pub fn build(b: *std.Build) void {
     live_run.setEnvironmentVariable("SteamGameId", b.fmt("{d}", .{app}));
     if (b.args) |args| live_run.addArgs(args);
     b.step("live-test", "Explicit opt-in: run bounded tests with a running Steam client").dependOn(&live_run.step);
+}
+
+fn addNetworkingGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
+    const use_llvm: ?bool = if (target.result.os.tag == .linux) true else null;
+    const module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    module.addIncludePath(b.path("c"));
+    module.addCSourceFile(.{ .file = b.path("tests/networking_guards.cpp"), .flags = cpp_flags });
+    const options = b.addOptions();
+    options.addOption(bool, "fatal_lifecycle", true);
+    module.addOptions("steamworkz_test_options", options);
+    // One SDK-free executable serves every case. A broken guard must never reach
+    // Steam: bridge stubs abort, which cannot match the required lease diagnostic.
+    const executable = b.addTest(.{
+        .name = "networking-guards",
+        .root_module = module,
+        .filters = &.{"networking fatal guard"},
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
+    });
+    compile_tests.dependOn(&executable.step);
+    const step = b.step("test-networking-guards", "Check networking leases before empty, invalid and native paths without Steam linkage");
+    const methods = [_][]const u8{
+        "telemetry_empty",     "telemetry_excess",   "detailed_empty",
+        "lanes_empty",         "lanes_weight",       "lanes_native",
+        "batch_empty",         "batch_lane",         "batch_native",
+        "config_set_invalid",  "config_set_native",  "config_clear_invalid",
+        "config_clear_native", "config_get_invalid", "config_get_native",
+        "simulation_invalid",  "simulation_native",  "simulation_reset",
+        "debug_start_invalid", "debug_start_native", "debug_drain_empty",
+        "debug_drain_storage", "debug_stop",         "debug_shutdown",
+    };
+    for ([_]struct { lease: []const u8, diagnostic: []const u8 }{
+        .{ .lease = "closed", .diagnostic = "moved-client" },
+        .{ .lease = "stale", .diagnostic = "stale-lease" },
+        .{ .lease = "foreign", .diagnostic = "wrong-thread" },
+    }) |case| {
+        for (methods) |method| {
+            const check = b.addRunArtifact(runner);
+            check.step.name = b.fmt("networking guard {s}/{s}", .{ case.lease, method });
+            check.addArgs(&.{ "check", case.diagnostic });
+            check.addArtifactArg(executable);
+            check.setEnvironmentVariable("STEAMWORKZ_GUARD_LEASE", case.lease);
+            check.setEnvironmentVariable("STEAMWORKZ_GUARD_METHOD", method);
+            step.dependOn(&check.step);
+        }
+    }
+    return step;
 }
 
 fn addConsumerTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, sdk: []const u8) *std.Build.Step {

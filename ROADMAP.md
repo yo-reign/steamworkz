@@ -84,16 +84,28 @@ CI preparation does not imply runner provisioning, dispatch authority or an exec
 
 ### M2 — Networking tools and traffic control
 
+SDK contract planning is complete against the accepted M1 checkpoint. The parent inspected the report and verified the unchanged planning source.
+Telemetry/text, configuration/simulation and debug capture are implemented in isolation. The parent read all three handoffs and inspected their source and component evidence without finding a production implementation blocker.
+Lanes/batch and received-lane conversion also completed their isolated gates. The parent inspected the exact increment, ownership paths and execution evidence.
+All component writers ended ownership. The parent copied ten component files into a separate integration worktree and added shared lifecycle/build/consumer registration.
+The integrated candidate passed all four native optimization modes and all four target compile/link/install graphs. Active diagnostics, retained production imports and the actual archive/consumer check passed.
+Private debug-test unwind cleanup was repaired and negatively tested, without changing production callback code.
+Independent package/build review found no issues. Runtime review found two test-only cleanup omissions; both were repaired, validated in the affected scope and re-reviewed with no issues.
+The parent accepted M2 source after the fixed-source package audit and copied the exact candidate into main. Repeat document-inclusive archive/staged-tree checks at publication. New native-service behavior and performance remain separate readiness gates.
+
 | ID | Work | Acceptance | State |
 | --- | --- | --- | --- |
-| NET-01 | Real-time telemetry | Owned typed status exposes ping, quality, pending bytes, and queue estimates with native result fidelity | pending |
-| NET-02 | Detailed diagnostic text | Explicit borrowed/copy/allocation contract handles required capacity and failures without silent truncation | pending |
-| NET-03 | Selected typed configuration | Timeouts, buffers, and useful rate controls validate type/scope; unsupported settings are not guessed | pending |
-| NET-04 | Development packet simulation | Explicit loss/lag/reordering options with safe reset, deterministic marshalling tests, and no default gameplay changes | pending |
-| NET-05 | Debug output | Thread-safe bounded handling of SDK service-thread callbacks; no Steam calls from the callback; defined overflow and teardown behavior | pending |
-| NET-06 | Connection lanes | Typed lane configuration and send selection preserve same-lane reliable ordering contract and validate limits | pending |
-| NET-07 | Batch sending | Explicit outbound ownership and accepted/rejected/not-attempted outcomes; cleanup covers every partial-failure path | pending |
+| NET-01 | Real-time telemetry | Owned typed status exposes ping, quality, pending bytes, and queue estimates with native result fidelity | accepted |
+| NET-02 | Detailed diagnostic text | Caller-storage API preserves native sizing/failure results and documents short-buffer mutation | accepted |
+| NET-03 | Selected typed configuration | Timeouts, buffers, and useful rate controls validate type/scope; unsupported settings are not guessed | accepted |
+| NET-04 | Development packet simulation | Explicit loss/lag/reordering options with safe reset, deterministic marshalling tests, and no default gameplay changes | accepted |
+| NET-05 | Debug output | Thread-safe bounded handling of SDK service-thread callbacks; no Steam calls from the callback; defined overflow and teardown behavior | accepted |
+| NET-06 | Connection lanes | Typed lane configuration and send selection preserve same-lane reliable ordering contract and validate limits | accepted |
+| NET-07 | Batch sending | Explicit outbound ownership and accepted/rejected/not-attempted outcomes; cleanup covers every partial-failure path | accepted |
 
+Simulation reset clears selected overrides to SDK defaults. It does not restore older explicit values or provide atomic rollback.
+Debug capture uses persistent process-wide storage. Stop does not establish callback quiescence, and restart does not establish session provenance.
+Both capabilities require explicit opt-in. Existing client initialization gains no default action or optional-interface requirement.
 Keep the existing received-message ownership model. A send accepted locally does not prove delivery.
 Do not infer performance gains without measurements.
 
