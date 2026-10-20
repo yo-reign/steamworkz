@@ -14,12 +14,12 @@ import tarfile
 PACKAGE_FILES = frozenset("""
 build.zig build.zig.zon README.md LICENSE ROADMAP.md CHECKPOINT.md
 c/core.cpp c/core.h c/networking.cpp c/networking.h c/lobbies.cpp c/lobbies.h
-c/services.cpp c/services.h c/types.h
+c/services.cpp c/services.h c/types.h c/utils.cpp c/utils.h c/input.cpp c/input.h
 c/networking_config.cpp c/networking_config.h c/networking_debug.cpp c/networking_debug.h
 src/Client.zig src/Context.zig src/Networking.zig src/NetworkingConfig.zig src/NetworkingDebug.zig
-src/Lobbies.zig src/events.zig
+src/Lobbies.zig src/events.zig src/Utils.zig src/Input.zig
 src/native.zig src/requests.zig src/root.zig src/services.zig src/types.zig
-examples/smoke.zig tests/lifecycle_runner.zig tests/networking_guards.cpp
+examples/smoke.zig tests/lifecycle_runner.zig tests/networking_guards.cpp tests/platform_guards.cpp
 tests/consumer/build.zig tests/consumer/build.zig.zon tests/consumer/main.zig tests/consumer/no_debug.zig
 tests/consumer/invalid_request.zig tests/consumer/invalid_image.zig
 tests/offline/check.py tests/offline/README.md

@@ -16,19 +16,24 @@ zig build test-properties -Dsdk="$STEAMWORKS_SDK"
 zig build test-networking-tools -Dsdk="$STEAMWORKS_SDK"
 zig build test-networking-config test-networking-debug -Dsdk="$STEAMWORKS_SDK"
 zig build test-networking-guards -Dsdk="$STEAMWORKS_SDK"
+zig build test-platform-tools test-utils test-input -Dsdk="$STEAMWORKS_SDK"
+zig build test-platform-guards -Dsdk="$STEAMWORKS_SDK"
 zig build test-consumer -Dsdk="$STEAMWORKS_SDK"
 zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast
 ```
 
-- `test` runs the normal Zig suite (including deterministic properties), six
+- `test` runs the normal Zig suite (including deterministic properties), eight
   native fixtures, lifecycle runner self-tests, five original fatal checks,
-  networking guards, and the independent consumer install/negative probes.
-  The normal suite deliberately skips six fatal bodies. The separate lifecycle
+  networking/platform guards, and the independent consumer install/negative probes.
+  The normal suite deliberately skips seven fatal bodies. The separate lifecycle
   control repeats the passing lifecycle test (and the root discovery test).
-- `test-core` exercises 948 bounded acquired-callback cases. `test-services`
-  exercises five service groups with every SDK entry/accessor substituted; it
-  links libc only, not Steam or the C++ standard library. Existing networking and
-  lobbies fixtures also have focused aliases.
+- `test-core` exercises 1228 bounded acquired-callback cases, including correlated
+  secondary capture before release and owned data surviving source invalidation.
+  Its uncalled production paths link Steam; its executed source substitutes the
+  new keyboard/leaderboard getters. `test-services` exercises legacy services and
+  new cloud/progression calls with every SDK entry/accessor substituted. It links
+  libc only, not Steam or the C++ standard library. Existing networking and lobbies
+  fixtures also have focused aliases.
 - `test-lifecycle` uses private generated `steamworkz_test_options` execution
   selection; only distinct filtered fatal artifacts enable it. The Zig runner
   checks markers, exact panic diagnostics, abnormal exit, bounded output and
@@ -46,11 +51,24 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
   broken guard cannot call Steam or pass as the required lease panic. Normal
   return/local validation failure also cannot pass. No second process runner or
   Python dependency was added.
+- `test-platform-tools` filters Utils, Input, cloud, progression, event ownership
+  and Client correlation/shutdown tests. Utils/Input Zig tests inject native calls;
+  `test-utils` and `test-input` also substitute every native call/accessor and link
+  without Steam. No manifest/glyph files, UI, vibration, account or network action
+  runs in these tests. Synthetic Windows path tests establish lexical behavior,
+  not encoding acceptance, file existence or native manifest loading.
+- `test-platform-guards` uses one SDK-free artifact and the existing bounded runner:
+  73 facade/owner method-input selections × three lease failures, four Client
+  methods × closed/foreign failures, plus acquired-cloud-batch close refusal =
+  228 checks per mode. Client itself owns the current Context, not an old captured
+  generation. Empty, invalid, pending/failed-state and consumed-owner paths cannot
+  bypass the lease. Fake calls or aborting stubs cannot satisfy the expected panic.
 - `test-consumer` builds a separate dependency project with the consumer's default
   compiler/linker selection; it does not run its executable or recurse into
   dependency tests. Target, CPU model/features, optimization and explicit SDK
-  propagate. Uncalled initialization/shutdown/networking exports retain real
-  production paths, including a reachable ownership transition. They are not
+  propagate. Uncalled initialization/shutdown/networking/platform exports retain
+  real production paths, including a reachable ownership transition and the
+  integrated keyboard/leaderboard callback-copy path. They are not
   application recipes and must remain unexecuted. A second no-capture consumer
   forces the real C++ registration symbol to survive dead stripping, which checks
   the required Zig sink without starting capture. Both consumers are install-only.
@@ -60,9 +78,9 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
   API-call request` and implicit integer-to-`ImageHandle` to fail with
   `expected type 'types.ImageHandle', found 'comptime_int'`. Unrelated SDK/build
   failures cannot satisfy those diagnostics; positive installation must also pass.
-- `test-compile` builds normal/control/property/networking tests, five original
-  fatal artifacts, the SDK-free guard artifact, target runner, six fixtures and
-  independent consumer/probes without
+- `test-compile` builds normal/control/property/networking/platform tests, five
+  original fatal artifacts, both SDK-free guard artifacts, target runner, eight
+  fixtures and independent consumer/probes without
   running target programs. It invokes a host Zig build process for the consumer,
   not a target executable. It does not install/run the smoke example.
 - Plain `zig build install` compiles/installs the smoke example and official
@@ -71,7 +89,12 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
 Use all four optimization modes for native aggregate gates. Use ReleaseFast
 `test-compile` for `aarch64-macos`, `x86_64-macos`, `x86_64-linux-gnu` and
 `x86_64-windows-gnu`; e.g. `-Dcpu=x86_64_v3` additionally exercises CPU features on
-an x86_64 target. Compile/link is not non-host runtime evidence.
+an x86_64 target. Compile/link is not non-host runtime evidence. Inline owned leaderboard storage
+also enlarges all events. Compiler-emitted constants for the four targets measure
+Zig Event at 28,856 bytes and private C SwEvent at 28,848 bytes. This is not a
+runtime performance measurement. Physical Input, keyboard/overlay, native cloud,
+leaderboard/global-percentage behavior and backend configuration need separate
+authorized execution.
 
 ## Optional maintainer source/package check
 

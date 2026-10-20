@@ -1,6 +1,7 @@
 #ifndef MEIKYUU_STEAMWORKS_CORE_H
 #define MEIKYUU_STEAMWORKS_CORE_H
 #include "types.h"
+#include "utils.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -16,7 +17,11 @@ enum SwEventKind {
     SW_CONNECTION_CHANGED, SW_RELAY_STATUS,
     SW_AUTH_TICKET, SW_WEB_TICKET, SW_AUTH_VALIDATED,
     SW_STATS_RECEIVED, SW_STATS_STORED, SW_ACHIEVEMENT_STORED,
-    SW_CLOUD_WRITTEN, SW_STATS_UNLOADED
+    SW_CLOUD_WRITTEN, SW_STATS_UNLOADED,
+    SW_ACHIEVEMENT_ICON, SW_LEADERBOARD_FOUND, SW_LEADERBOARD_ENTRIES,
+    SW_LEADERBOARD_UPLOADED, SW_GLOBAL_PERCENTAGES_READY,
+    SW_GAMEPAD_DISMISSED, SW_FLOATING_DISMISSED, SW_RESUMED,
+    SW_CLOUD_CHANGED, SW_INPUT_CONNECTED, SW_INPUT_DISCONNECTED
 };
 enum SwCallFailure { SW_RESULT_UNAVAILABLE = 1, SW_IO_FAILURE = 2 };
 
@@ -49,6 +54,13 @@ typedef struct SwEvent {
         struct { uint64_t game; uint64_t user; int32_t result; } stats;
         struct { uint64_t game; char name[128]; uint32_t current; uint32_t maximum; uint8_t group; } achievement;
         struct { int32_t result; } cloud;
+        struct { uint64_t game; char name[128]; uint8_t achieved; int32_t image; } achievement_icon;
+        struct { uint64_t leaderboard; uint8_t found; } leaderboard_found;
+        struct { uint64_t leaderboard; SwLeaderboardEntries capture; } leaderboard_download;
+        struct { uint64_t leaderboard; uint8_t success; int32_t score; uint8_t changed; int32_t rank_new; int32_t rank_previous; } leaderboard_upload;
+        struct { uint64_t game; int32_t result; } global_percentages;
+        struct { uint32_t app; uint8_t submitted, matched; SwUtilsTextCapture capture; } gamepad;
+        struct { uint64_t controller; } input_device;
         struct { int32_t reason; } call_failure;
     } data;
 } SwEvent;
@@ -59,8 +71,14 @@ void sw_shutdown(void);
 uint8_t sw_restart_if_necessary(uint32_t app);
 int32_t sw_pipe(void);
 void sw_run_frame(int32_t pipe);
-/* Returns an owned event. Frees the SDK callback before returning. */
-uint8_t sw_next_event(int32_t pipe, SwEvent *event);
+/* Borrowed call-time correlation only; no retained Context pointer. */
+typedef struct SwPollState {
+    uint64_t leaderboard_download_call;
+    uint32_t keyboard_app_id;
+    uint8_t gamepad_pending;
+} SwPollState;
+/* Returns an owned event. Captures secondary data before freeing the callback. */
+uint8_t sw_next_event(int32_t pipe, const SwPollState *state, SwEvent *event);
 uint64_t sw_user_id(void);
 uint8_t sw_logged_on(void);
 uint32_t sw_app_id(void);

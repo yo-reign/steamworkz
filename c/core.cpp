@@ -1,4 +1,5 @@
 #include "core.h"
+#include "services.h"
 #include <steam/steam_api.h>
 #include <steam/steam_api_flat.h>
 #include <string.h>
@@ -196,13 +197,88 @@ void convert(const RemoteStorageFileWriteAsyncComplete_t &v, SwEvent &e) {
     e.kind = SW_CLOUD_WRITTEN; e.data.cloud.result = enum_value(v.m_eResult);
 }
 
+void convert(const UserAchievementIconFetched_t &v, SwEvent &e) {
+    static_assert(sizeof(v.m_rgchAchievementName) == sizeof(e.data.achievement_icon.name), "Icon name size changed");
+    e.kind = SW_ACHIEVEMENT_ICON; e.data.achievement_icon.game = v.m_nGameID.ToUint64();
+    memcpy(e.data.achievement_icon.name, v.m_rgchAchievementName, sizeof(v.m_rgchAchievementName));
+    e.data.achievement_icon.achieved = v.m_bAchieved; e.data.achievement_icon.image = v.m_nIconHandle;
+}
+void convert(const LeaderboardFindResult_t &v, SwEvent &e) {
+    e.kind = SW_LEADERBOARD_FOUND; e.data.leaderboard_found.leaderboard = v.m_hSteamLeaderboard;
+    e.data.leaderboard_found.found = v.m_bLeaderboardFound;
+}
+void convert(const LeaderboardScoresDownloaded_t &v, SwEvent &e) {
+    e.kind = SW_LEADERBOARD_ENTRIES; e.data.leaderboard_download.leaderboard = v.m_hSteamLeaderboard;
+    auto &capture = e.data.leaderboard_download.capture;
+    capture.status = SW_LEADERBOARD_CAPTURE_UNTRACKED; capture.reported_count = v.m_cEntryCount; capture.failure_index = -1;
+}
+void convert(const LeaderboardScoreUploaded_t &v, SwEvent &e) {
+    e.kind = SW_LEADERBOARD_UPLOADED;
+    auto &out = e.data.leaderboard_upload;
+    out.leaderboard = v.m_hSteamLeaderboard; out.success = v.m_bSuccess; out.score = v.m_nScore;
+    out.changed = v.m_bScoreChanged; out.rank_new = v.m_nGlobalRankNew; out.rank_previous = v.m_nGlobalRankPrevious;
+}
+void convert(const GlobalAchievementPercentagesReady_t &v, SwEvent &e) {
+    e.kind = SW_GLOBAL_PERCENTAGES_READY; e.data.global_percentages.game = v.m_nGameID;
+    e.data.global_percentages.result = enum_value(v.m_eResult);
+}
+void convert(const GamepadTextInputDismissed_t &v, SwEvent &e) {
+    e.kind = SW_GAMEPAD_DISMISSED; e.data.gamepad.app = v.m_unAppID; e.data.gamepad.submitted = v.m_bSubmitted;
+    e.data.gamepad.capture.status = SW_UTILS_TEXT_UNTRACKED;
+    e.data.gamepad.capture.reported_length = v.m_unSubmittedText;
+}
+void convert(const FloatingGamepadTextInputDismissed_t &, SwEvent &e) { e.kind = SW_FLOATING_DISMISSED; }
+void convert(const AppResumingFromSuspend_t &, SwEvent &e) { e.kind = SW_RESUMED; }
+void convert(const RemoteStorageLocalFileChange_t &, SwEvent &e) { e.kind = SW_CLOUD_CHANGED; }
+void convert(const SteamInputDeviceConnected_t &v, SwEvent &e) {
+    e.kind = SW_INPUT_CONNECTED; e.data.input_device.controller = v.m_ulConnectedDeviceHandle;
+}
+void convert(const SteamInputDeviceDisconnected_t &v, SwEvent &e) {
+    e.kind = SW_INPUT_DISCONNECTED; e.data.input_device.controller = v.m_ulDisconnectedDeviceHandle;
+}
+
+// Only these two callbacks require secondary native reads. Correlate first.
+template<class T, class Source> void capture(const T &, SwEvent &, const SwPollState &, Source &) {}
+template<class Source> void capture(const GamepadTextInputDismissed_t &v, SwEvent &out, const SwPollState &state, Source &source) {
+    if (!state.gamepad_pending || state.keyboard_app_id != v.m_unAppID) return;
+    out.data.gamepad.matched = 1;
+    source.gamepad(v.m_bSubmitted, v.m_unSubmittedText, &out.data.gamepad.capture);
+}
+template<class Source> void capture(const LeaderboardScoresDownloaded_t &v, SwEvent &out, const SwPollState &state, Source &source) {
+    if (!out.call || out.call != state.leaderboard_download_call) return;
+    source.entries(v.m_hSteamLeaderboardEntries, v.m_cEntryCount, &out.data.leaderboard_download.capture);
+}
+template<class T, class Source> void decode_captured(const CallbackMsg_t &message, SwEvent &out, const SwPollState &state, Source &source) {
+    if (message.m_cubParam != sizeof(T) || !message.m_pubParam) { out.kind = SW_MALFORMED; return; }
+    T value = {};
+    memcpy(&value, message.m_pubParam, sizeof(value));
+    convert(value, out);
+    capture(value, out, state, source);
+}
 template<class T> void decode(const CallbackMsg_t &message, SwEvent &out) {
     if (message.m_cubParam != sizeof(T) || !message.m_pubParam) { out.kind = SW_MALFORMED; return; }
     T value;
     memcpy(&value, message.m_pubParam, sizeof(value));
     convert(value, out);
 }
+// CGameID has a non-trivial copy constructor. Read its declared integer member
+// by SDK-derived offsets, then use Set; never memcpy into the class object.
+void decode_icon(const CallbackMsg_t &message, SwEvent &out) {
+    using T = UserAchievementIconFetched_t;
+    if (message.m_cubParam != sizeof(T) || !message.m_pubParam) { out.kind = SW_MALFORMED; return; }
+    T value = {};
+    uint64 game = 0;
+    const auto *const bytes = message.m_pubParam;
+    memcpy(&game, bytes + offsetof(T, m_nGameID) + offsetof(CGameID, m_ulGameID), sizeof(game));
+    value.m_nGameID.Set(game);
+    memcpy(value.m_rgchAchievementName, bytes + offsetof(T, m_rgchAchievementName), sizeof(value.m_rgchAchievementName));
+    memcpy(&value.m_bAchieved, bytes + offsetof(T, m_bAchieved), sizeof(value.m_bAchieved));
+    memcpy(&value.m_nIconHandle, bytes + offsetof(T, m_nIconHandle), sizeof(value.m_nIconHandle));
+    convert(value, out);
+}
 struct NativeCallbacks {
+    void gamepad(uint8_t submitted, uint32_t length, SwUtilsTextCapture *out) { sw_utils_capture_gamepad_text(submitted, length, out); }
+    void entries(uint64_t handle, int32_t count, SwLeaderboardEntries *out) { sw_stats_copy_leaderboard_entries(handle, count, out); }
     bool next(int32_t pipe, CallbackMsg_t *message) { return SteamAPI_ManualDispatch_GetNextCallback(pipe, message); }
     void free(int32_t pipe) { SteamAPI_ManualDispatch_FreeLastCallback(pipe); }
     bool result(int32_t pipe, SteamAPICall_t call, void *value, int size, int id, bool *failed) {
@@ -214,7 +290,7 @@ template<class Source> struct CallbackRelease {
     int32_t pipe;
     ~CallbackRelease() { source.free(pipe); }
 };
-template<class T, class Source> void completion(Source &source, int32_t pipe, const SteamAPICallCompleted_t &call, SwEvent &out) {
+template<class T, class Source> void completion(Source &source, int32_t pipe, const SteamAPICallCompleted_t &call, SwEvent &out, const SwPollState &state = {}) {
     if (call.m_cubParam != sizeof(T)) { out.kind = SW_MALFORMED; return; }
     T value = {};
     bool failed = false;
@@ -224,9 +300,10 @@ template<class T, class Source> void completion(Source &source, int32_t pipe, co
         out.kind = SW_CALL_FAILED; out.data.call_failure.reason = SW_IO_FAILURE;
     } else {
         convert(value, out);
+        capture(value, out, state, source);
     }
 }
-template<class Source> bool poll(Source &source, int32_t pipe, SwEvent &out) {
+template<class Source> bool poll(Source &source, int32_t pipe, SwEvent &out, const SwPollState &state = {}) {
     CallbackMsg_t message = {};
     if (!source.next(pipe, &message)) return false;
     const CallbackRelease<Source> release{source, pipe};
@@ -263,6 +340,17 @@ template<class Source> bool poll(Source &source, int32_t pipe, SwEvent &out) {
         case UserStatsUnloaded_t::k_iCallback: decode<UserStatsUnloaded_t>(message, out); break;
         case UserAchievementStored_t::k_iCallback: decode<UserAchievementStored_t>(message, out); break;
         case RemoteStorageFileWriteAsyncComplete_t::k_iCallback: decode<RemoteStorageFileWriteAsyncComplete_t>(message, out); break;
+        case UserAchievementIconFetched_t::k_iCallback: decode_icon(message, out); break;
+        case LeaderboardFindResult_t::k_iCallback: decode<LeaderboardFindResult_t>(message, out); break;
+        case LeaderboardScoresDownloaded_t::k_iCallback: decode<LeaderboardScoresDownloaded_t>(message, out); break;
+        case LeaderboardScoreUploaded_t::k_iCallback: decode<LeaderboardScoreUploaded_t>(message, out); break;
+        case GlobalAchievementPercentagesReady_t::k_iCallback: decode<GlobalAchievementPercentagesReady_t>(message, out); break;
+        case GamepadTextInputDismissed_t::k_iCallback: decode_captured<GamepadTextInputDismissed_t>(message, out, state, source); break;
+        case FloatingGamepadTextInputDismissed_t::k_iCallback: decode<FloatingGamepadTextInputDismissed_t>(message, out); break;
+        case AppResumingFromSuspend_t::k_iCallback: decode<AppResumingFromSuspend_t>(message, out); break;
+        case RemoteStorageLocalFileChange_t::k_iCallback: decode<RemoteStorageLocalFileChange_t>(message, out); break;
+        case SteamInputDeviceConnected_t::k_iCallback: decode<SteamInputDeviceConnected_t>(message, out); break;
+        case SteamInputDeviceDisconnected_t::k_iCallback: decode<SteamInputDeviceDisconnected_t>(message, out); break;
         case SteamAPICallCompleted_t::k_iCallback: {
             if (message.m_cubParam != sizeof(SteamAPICallCompleted_t) || !message.m_pubParam) { out.kind = SW_MALFORMED; break; }
             SteamAPICallCompleted_t call;
@@ -275,6 +363,10 @@ template<class Source> bool poll(Source &source, int32_t pipe, SwEvent &out) {
                 case LobbyMatchList_t::k_iCallback: completion<LobbyMatchList_t>(source, pipe, call, out); break;
                 case UserStatsReceived_t::k_iCallback: completion<UserStatsReceived_t>(source, pipe, call, out); break;
                 case RemoteStorageFileWriteAsyncComplete_t::k_iCallback: completion<RemoteStorageFileWriteAsyncComplete_t>(source, pipe, call, out); break;
+                case LeaderboardFindResult_t::k_iCallback: completion<LeaderboardFindResult_t>(source, pipe, call, out); break;
+                case LeaderboardScoresDownloaded_t::k_iCallback: completion<LeaderboardScoresDownloaded_t>(source, pipe, call, out, state); break;
+                case LeaderboardScoreUploaded_t::k_iCallback: completion<LeaderboardScoreUploaded_t>(source, pipe, call, out); break;
+                case GlobalAchievementPercentagesReady_t::k_iCallback: completion<GlobalAchievementPercentagesReady_t>(source, pipe, call, out); break;
                 default: break;
             }
             break;
@@ -285,9 +377,9 @@ template<class Source> bool poll(Source &source, int32_t pipe, SwEvent &out) {
 }
 } // namespace
 
-uint8_t sw_next_event(int32_t pipe, SwEvent *event) {
+uint8_t sw_next_event(int32_t pipe, const SwPollState *state, SwEvent *event) {
     NativeCallbacks source;
-    if (poll(source, pipe, *event)) return 1;
+    if (poll(source, pipe, *event, *state)) return 1;
     SteamAPI_ReleaseCurrentThreadMemory();
     return 0;
 }
@@ -340,7 +432,24 @@ template<class T> struct FakeCallbacks {
     bool retrieved = true;
     bool io_failed = false;
     int fetches = 0;
+    SteamAPICall_t expected_call = test_call;
+    int gamepad_copies = 0, entry_copies = 0;
+    char text[4] = "own";
+    int32_t detail = -91;
     T value = {};
+    void gamepad(uint8_t submitted, uint32_t length, SwUtilsTextCapture *out) {
+        expect(outstanding && frees == 0 && length == sizeof(text));
+        ++gamepad_copies;
+        *out = {}; out->reported_length = length;
+        out->status = submitted ? SW_UTILS_TEXT_COMPLETE : SW_UTILS_TEXT_CANCELED;
+        if (submitted) { out->queried_length = length; out->copied_length = length - 1; memcpy(out->bytes, text, sizeof(text)); }
+    }
+    void entries(uint64_t handle, int32_t count, SwLeaderboardEntries *out) {
+        expect(outstanding && frees == 0 && handle == 77 && count == 1);
+        ++entry_copies;
+        *out = {}; out->reported_count = 1; out->copied_count = 1; out->failure_index = -1; out->all_rows_accessed = 1;
+        out->entries[0].user = test_user; out->entries[0].detail_count = 1; out->entries[0].details[0] = detail;
+    }
     bool next(int32_t pipe, CallbackMsg_t *out) {
         expect(pipe == test_pipe && !outstanding);
         ++nexts;
@@ -350,10 +459,11 @@ template<class T> struct FakeCallbacks {
     void free(int32_t pipe) {
         expect(pipe == test_pipe && outstanding && frees == 0);
         outstanding = false; ++frees;
+        memset(text, 0, sizeof(text)); detail = 0;
     }
     bool result(int32_t pipe, SteamAPICall_t handle, void *out, int size, int id, bool *failed) {
         expect(pipe == test_pipe && outstanding && frees == 0);
-        expect(handle == test_call && out != nullptr && failed != nullptr);
+        expect(handle == expected_call && out != nullptr && failed != nullptr);
         expect(size == sizeof(T) && id == T::k_iCallback && fetches == 0);
         ++fetches;
         *failed = io_failed;
@@ -405,6 +515,26 @@ void verify_result(const UserStatsReceived_t &v, const SwEvent &e) {
 }
 void verify_result(const RemoteStorageFileWriteAsyncComplete_t &v, const SwEvent &e) {
     expect(e.kind == SW_CLOUD_WRITTEN && e.data.cloud.result == enum_value(v.m_eResult));
+}
+
+void verify_result(const LeaderboardFindResult_t &v, const SwEvent &e) {
+    expect(e.kind == SW_LEADERBOARD_FOUND && e.data.leaderboard_found.leaderboard == v.m_hSteamLeaderboard);
+    expect(e.data.leaderboard_found.found == v.m_bLeaderboardFound);
+}
+void verify_result(const LeaderboardScoresDownloaded_t &v, const SwEvent &e) {
+    expect(e.kind == SW_LEADERBOARD_ENTRIES && e.data.leaderboard_download.leaderboard == v.m_hSteamLeaderboard);
+    expect(e.data.leaderboard_download.capture.reported_count == v.m_cEntryCount);
+    expect(e.data.leaderboard_download.capture.status == SW_LEADERBOARD_CAPTURE_UNTRACKED);
+}
+void verify_result(const LeaderboardScoreUploaded_t &v, const SwEvent &e) {
+    expect(e.kind == SW_LEADERBOARD_UPLOADED);
+    const auto &out = e.data.leaderboard_upload;
+    expect(out.leaderboard == v.m_hSteamLeaderboard && out.success == v.m_bSuccess && out.score == v.m_nScore);
+    expect(out.changed == v.m_bScoreChanged && out.rank_new == v.m_nGlobalRankNew && out.rank_previous == v.m_nGlobalRankPrevious);
+}
+void verify_result(const GlobalAchievementPercentagesReady_t &v, const SwEvent &e) {
+    expect(e.kind == SW_GLOBAL_PERCENTAGES_READY && e.data.global_percentages.game == v.m_nGameID);
+    expect(e.data.global_percentages.result == enum_value(v.m_eResult));
 }
 
 template<class T> void completion_cases(const char *name, const T &value) {
@@ -528,6 +658,75 @@ void test_completions() {
     completion_cases("RemoteStorageFileWriteAsyncComplete_t/unknown-result", written);
 }
 
+void test_platform_completions() {
+    LeaderboardFindResult_t found = {}; found.m_hSteamLeaderboard = 53;
+    completion_cases("LeaderboardFindResult_t/not-found", found);
+    found.m_bLeaderboardFound = 1;
+    completion_cases("LeaderboardFindResult_t/found", found);
+    LeaderboardScoresDownloaded_t downloaded = {};
+    downloaded.m_hSteamLeaderboard = 53; downloaded.m_hSteamLeaderboardEntries = 77; downloaded.m_cEntryCount = -9;
+    completion_cases("LeaderboardScoresDownloaded_t/untracked", downloaded);
+    LeaderboardScoreUploaded_t uploaded = {}; uploaded.m_hSteamLeaderboard = 53;
+    uploaded.m_nScore = INT32_MIN; uploaded.m_nGlobalRankNew = -19; uploaded.m_nGlobalRankPrevious = 0;
+    completion_cases("LeaderboardScoreUploaded_t/rejected", uploaded);
+    uploaded.m_bSuccess = 1; uploaded.m_bScoreChanged = 1;
+    completion_cases("LeaderboardScoreUploaded_t/changed", uploaded);
+    GlobalAchievementPercentagesReady_t percentages = {}; percentages.m_nGameID = test_game;
+    percentages.m_eResult = k_EResultFail;
+    completion_cases("GlobalAchievementPercentagesReady_t/failure", percentages);
+    percentages.m_eResult = k_EResultOK;
+    completion_cases("GlobalAchievementPercentagesReady_t/success", percentages);
+
+    test_type = "leaderboard correlation and capture lifetime";
+    test_callback = LeaderboardScoresDownloaded_t::k_iCallback;
+    for (int correlation = 0; correlation < 5; ++correlation) for (int failure = 0; failure < 4; ++failure) {
+        test_case = "capture before free"; test_index = correlation; test_variant = failure;
+        FakeCallbacks<LeaderboardScoresDownloaded_t> source;
+        source.value = downloaded; source.value.m_cEntryCount = 1;
+        source.expected_call = correlation == 3 ? 0 : test_call;
+        SteamAPICallCompleted_t call = {};
+        call.m_hAsyncCall = source.expected_call; call.m_iCallback = test_callback; call.m_cubParam = sizeof(downloaded);
+        source.message = {0, SteamAPICallCompleted_t::k_iCallback, reinterpret_cast<uint8_t *>(&call), sizeof(call)};
+        if (correlation == 4) source.message = {0, test_callback, reinterpret_cast<uint8_t *>(&source.value), sizeof(downloaded)};
+        source.retrieved = failure != 1; source.io_failed = failure == 2;
+        if (failure == 3) { --call.m_cubParam; if (correlation == 4) --source.message.m_cubParam; }
+        const SwPollState state{correlation == 1 || correlation == 3 ? 0 : correlation == 2 ? test_call + 1 : test_call, 0, 0};
+        GuardedEvent out;
+        expect(poll(source, test_pipe, out.event, state));
+        expect(source.gamepad_copies == 0);
+        const bool copied = correlation == 0 && failure == 0;
+        expect(source.entry_copies == int(copied));
+        if (copied) {
+            expect(out.event.data.leaderboard_download.capture.status == SW_LEADERBOARD_CAPTURE_COMPLETE);
+            expect(out.event.data.leaderboard_download.capture.entries[0].details[0] == -91);
+            expect(source.detail == 0); // Source invalidated by free; output survives.
+        }
+        drained(source, out, correlation != 4 && failure != 3 ? 1 : 0);
+    }
+}
+
+void test_keyboard_capture() {
+    test_type = "keyboard correlation and capture lifetime"; test_callback = GamepadTextInputDismissed_t::k_iCallback;
+    for (int match = 0; match < 3; ++match) for (int submitted = 0; submitted < 2; ++submitted) for (int malformed = 0; malformed < 2; ++malformed) {
+        test_case = "pending/app match before getter"; test_index = match; test_variant = submitted * 2 + malformed;
+        GamepadTextInputDismissed_t value = {}; value.m_bSubmitted = submitted != 0; value.m_unSubmittedText = 4; value.m_unAppID = 73;
+        FakeCallbacks<GamepadTextInputDismissed_t> source;
+        source.message = {0, test_callback, reinterpret_cast<uint8_t *>(&value), int(sizeof(value)) - malformed};
+        const SwPollState state{0, match == 1 ? 74U : 73U, uint8_t(match != 2)};
+        GuardedEvent out;
+        expect(poll(source, test_pipe, out.event, state));
+        const bool matched = match == 0 && !malformed;
+        expect(source.gamepad_copies == int(matched) && source.entry_copies == 0);
+        if (!malformed) {
+            expect(out.event.data.gamepad.app == 73 && out.event.data.gamepad.submitted == submitted && out.event.data.gamepad.matched == matched);
+            expect(out.event.data.gamepad.capture.reported_length == 4);
+            expect(out.event.data.gamepad.capture.status == (!matched ? SW_UTILS_TEXT_UNTRACKED : submitted ? SW_UTILS_TEXT_COMPLETE : SW_UTILS_TEXT_CANCELED));
+            if (matched && submitted) expect(memcmp(out.event.data.gamepad.capture.bytes, "own", 4) == 0 && source.text[0] == 0);
+        } else expect(out.event.kind == SW_MALFORMED);
+        drained(source, out, 0);
+    }
+}
+
 void test_unknown_callbacks() {
     test_type = "unknown callback"; test_callback = 999999; test_variant = 0;
     for (int correlated = 0; correlated != 2; ++correlated) {
@@ -608,6 +807,15 @@ void test_broadcasts() {
     broadcast(unloaded, SW_STATS_UNLOADED, expect(e.data.stats.user == test_user));
     RemoteStorageFileWriteAsyncComplete_t written = {}; future_enum(written.m_eResult);
     broadcast(written, SW_CLOUD_WRITTEN, verify_result(written, e));
+    FloatingGamepadTextInputDismissed_t floating = {}; broadcast(floating, SW_FLOATING_DISMISSED, (void)e);
+    AppResumingFromSuspend_t resumed = {}; broadcast(resumed, SW_RESUMED, (void)e);
+    RemoteStorageLocalFileChange_t changed = {}; broadcast(changed, SW_CLOUD_CHANGED, (void)e);
+    SteamInputDeviceConnected_t input_connected = {}; input_connected.m_ulConnectedDeviceHandle = UINT64_MAX;
+    broadcast(input_connected, SW_INPUT_CONNECTED, expect(e.data.input_device.controller == UINT64_MAX));
+    SteamInputDeviceDisconnected_t input_disconnected = {}; input_disconnected.m_ulDisconnectedDeviceHandle = test_user;
+    broadcast(input_disconnected, SW_INPUT_DISCONNECTED, expect(e.data.input_device.controller == test_user));
+    GamepadTextInputDismissed_t gamepad = {}; gamepad.m_bSubmitted = true; gamepad.m_unSubmittedText = UINT32_MAX; gamepad.m_unAppID = 73;
+    broadcast(gamepad, SW_GAMEPAD_DISMISSED, expect(e.data.gamepad.app == 73 && e.data.gamepad.submitted == 1 && !e.data.gamepad.matched); expect(e.data.gamepad.capture.status == SW_UTILS_TEXT_UNTRACKED && e.data.gamepad.capture.reported_length == UINT32_MAX));
 }
 
 // Empty, embedded-NUL, final-NUL, and unterminated fixed buffers all copy
@@ -627,6 +835,9 @@ void test_text_and_ticket_bounds() {
         UserAchievementStored_t achievement = {}; achievement.m_nGameID = test_game; achievement.m_bGroupAchievement = true; achievement.m_nCurProgress = 7; achievement.m_nMaxProgress = 19;
         text_pattern(achievement.m_rgchAchievementName, pattern);
         broadcast(achievement, SW_ACHIEVEMENT_STORED, expect(e.data.achievement.game == test_game && e.data.achievement.group == 1 && e.data.achievement.current == 7 && e.data.achievement.maximum == 19); expect(memcmp(e.data.achievement.name, achievement.m_rgchAchievementName, sizeof(achievement.m_rgchAchievementName)) == 0));
+        UserAchievementIconFetched_t icon = {}; icon.m_nGameID = CGameID(test_game); icon.m_bAchieved = true; icon.m_nIconHandle = -17;
+        text_pattern(icon.m_rgchAchievementName, pattern);
+        broadcast(icon, SW_ACHIEVEMENT_ICON, expect(e.data.achievement_icon.game == test_game && e.data.achievement_icon.achieved && e.data.achievement_icon.image == -17); expect(memcmp(e.data.achievement_icon.name, icon.m_rgchAchievementName, sizeof(icon.m_rgchAchievementName)) == 0));
         SteamRelayNetworkStatus_t relay = {}; future_enum(relay.m_eAvail); relay.m_bPingMeasurementInProgress = 1;
         text_pattern(relay.m_debugMsg, pattern);
         broadcast(relay, SW_RELAY_STATUS, expect(e.data.relay.availability == future_value && e.data.relay.measuring == 1); expect(memcmp(e.data.relay.debug, relay.m_debugMsg, sizeof(relay.m_debugMsg)) == 0));
@@ -663,6 +874,8 @@ void test_text_and_ticket_bounds() {
 } // namespace
 int main() {
     test_completions();
+    test_platform_completions();
+    test_keyboard_capture();
     test_unknown_callbacks();
     test_broadcasts();
     test_text_and_ticket_bounds();

@@ -32,4 +32,34 @@ typedef struct SwMessageView {
     int32_t channel;
     uint16_t lane; /* Incoming lane; message numbers are scoped to each lane. */
 } SwMessageView;
+
+/* Wrapper row bound and the complete native detail capacity, not SDK layouts. */
+enum { SW_LEADERBOARD_MAX_ENTRIES = 100, SW_LEADERBOARD_MAX_DETAILS = 64 };
+enum SwLeaderboardCaptureStatus {
+    SW_LEADERBOARD_CAPTURE_COMPLETE,
+    SW_LEADERBOARD_CAPTURE_INVALID_COUNT,
+    SW_LEADERBOARD_CAPTURE_TOO_MANY_ROWS,
+    SW_LEADERBOARD_CAPTURE_INVALID_HANDLE,
+    SW_LEADERBOARD_CAPTURE_UNAVAILABLE,
+    SW_LEADERBOARD_CAPTURE_ENTRY_FAILED,
+    SW_LEADERBOARD_CAPTURE_INVALID_DETAILS,
+    SW_LEADERBOARD_CAPTURE_UNTRACKED
+};
+typedef struct SwLeaderboardEntry {
+    uint64_t user;
+    int32_t global_rank;
+    int32_t score;
+    uint64_t ugc;
+    uint32_t detail_count;
+    int32_t details[SW_LEADERBOARD_MAX_DETAILS];
+} SwLeaderboardEntry;
+typedef struct SwLeaderboardEntries {
+    int32_t status;
+    int32_t reported_count;
+    uint32_t copied_count;
+    int32_t failure_index;
+    int32_t reported_details;
+    uint8_t all_rows_accessed;
+    SwLeaderboardEntry entries[SW_LEADERBOARD_MAX_ENTRIES];
+} SwLeaderboardEntries;
 #endif

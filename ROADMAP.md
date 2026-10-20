@@ -91,7 +91,9 @@ All component writers ended ownership. The parent copied ten component files int
 The integrated candidate passed all four native optimization modes and all four target compile/link/install graphs. Active diagnostics, retained production imports and the actual archive/consumer check passed.
 Private debug-test unwind cleanup was repaired and negatively tested, without changing production callback code.
 Independent package/build review found no issues. Runtime review found two test-only cleanup omissions; both were repaired, validated in the affected scope and re-reviewed with no issues.
-The parent accepted M2 source after the fixed-source package audit and copied the exact candidate into main. Repeat document-inclusive archive/staged-tree checks at publication. New native-service behavior and performance remain separate readiness gates.
+The parent accepted M2 source after the fixed-source package audit and copied the exact candidate into main.
+Final document-inclusive archive and staged-tree checks passed. Commit `b41b7e4` was normally pushed, and its actual immutable URL/hash consumer passed build/install and negative probes.
+New native-service behavior and performance remain separate readiness gates.
 
 | ID | Work | Acceptance | State |
 | --- | --- | --- | --- |
@@ -111,18 +113,34 @@ Do not infer performance gains without measurements.
 
 ### M3 — Platform, saves, input, and progression
 
+The parent read the completed SDK contract report and verified the planning source and SDK inputs against accepted M2.
+Utilities, Input and cloud component handoffs completed in isolated worktrees. The parent read all reports and checked their exact source boundaries.
+Progression followed cloud without overlapping ownership. All four writers ended ownership; the parent inspected all source handoffs, exact frozen inputs and selected evidence.
+The parent integrated correlated callback-time capture, Client ownership transitions, optional teardown, public roots, build/consumer registration and SDK-free guards in a separate checkout.
+Four-mode offline test graphs passed, including 228 new platform/batch guards per mode. A missed const pointer in the smoke helper was repaired and its Debug install rechecked separately.
+Four ReleaseFast target graphs passed 36/36 compile/link/install steps. Artifact inspection confirmed native import/sink retention, runtime bytes and no wrapper C++ runtime dependency.
+Active SDK-aware diagnostics passed. Event storage was measured without a performance claim.
+The actual 52-source/49-member package audit passed, with relocated tests/install and an independent archive/hash consumer. Only its pure main ran.
+Three independent reviews completed. Ownership and distribution reviews found no defect; Input review found one reserved-argument forwarding discrepancy.
+The parent changed RunFrame to match the SDK's true default and corrected its fixture. Negative controls reject the original call in Debug and ReleaseFast.
+The fixed focused graphs passed 24 tests, one intentional skip and the Input fixture in both modes. Four-target fixture/consumer links, active diagnostics and the changed actual package audit passed.
+A scoped independent re-review confirmed the defect is resolved, with no new finding. The other 51 source files remained unchanged.
+The parent accepted M3 source on 2026-10-20. Final document-inclusive archive, indexed-source and immutable-consumer checks remain publication gates.
+The full four-mode graphs above precede the narrow correction; the focused checks supplement them without repeating unchanged work.
+Source acceptance does not establish native-service readiness. No M3 native-service execution is implied.
+
 | ID | Work | Acceptance | State |
 | --- | --- | --- | --- |
-| UTIL-01 | On-screen text entry | Full-screen/floating keyboards, dismissal events, bounded text retrieval, and cancellation contracts | pending |
-| UTIL-02 | Text filtering | Caller-owned output, UTF-8 byte capacity, source/context preservation, unavailable-filter behavior | pending |
-| UTIL-03 | Resume and hardware guidance | Owned resume event and SDK 1.65 default-settings guidance; preserve unknown enum values and avoid hardware-name feature gating | pending |
-| CLOUD-01 | Dynamic Cloud Sync changes | Owned notification plus bounded change enumeration with clear borrowed/owned path lifetime | pending |
-| CLOUD-02 | Write-batch hints | Paired begin/end ownership, failure handling, and teardown policy; explicitly not an atomic save transaction | pending |
-| INPUT-01 | Steam Input lifecycle and actions | Explicit init/frame/shutdown integration, action sets, digital/analog actions, and connection changes | pending |
-| INPUT-02 | Glyphs and vibration | Typed handles/options, caller-owned copied text where needed, device capability and fallback behavior | pending |
-| STATS-01 | Achievement icons | Typed image handles and owned readiness events integrated with existing image access | pending |
-| STATS-02 | Leaderboards | Find/query/upload requests, typed handles, copied entries/details, SDK result lifetime and concurrency restrictions | pending |
-| STATS-03 | Global achievement percentages | Typed request/readiness and bounded reads; no invented readiness cache | pending |
+| UTIL-01 | On-screen text entry | Full-screen/floating keyboards, dismissal events, bounded text retrieval, and cancellation contracts | accepted |
+| UTIL-02 | Text filtering | Caller-owned output, UTF-8 byte capacity, source/context preservation, unavailable-filter behavior | accepted |
+| UTIL-03 | Resume and hardware guidance | Owned resume event and SDK 1.65 default-settings guidance; preserve unknown enum values and avoid hardware-name feature gating | accepted |
+| CLOUD-01 | Dynamic Cloud Sync changes | Owned notification plus bounded change enumeration with clear borrowed/owned path lifetime | accepted |
+| CLOUD-02 | Write-batch hints | Paired begin/end ownership, failure handling, and teardown policy; explicitly not an atomic save transaction | accepted |
+| INPUT-01 | Steam Input lifecycle and actions | Explicit init/frame/shutdown integration, action sets, digital/analog actions, and connection changes | accepted |
+| INPUT-02 | Glyphs and vibration | Typed handles/options, caller-owned copied text where needed, device capability and fallback behavior | accepted |
+| STATS-01 | Achievement icons | Typed image handles and owned readiness events integrated with existing image access | accepted |
+| STATS-02 | Leaderboards | Find/query/upload requests, typed handles, copied entries/details, SDK result lifetime and concurrency restrictions | accepted |
+| STATS-03 | Global achievement percentages | Typed request/readiness and bounded reads; no invented readiness cache | accepted |
 
 Steam Input needs an action manifest and game integration. A binding alone does not establish controller support.
 Dynamic sync must not be enabled for a game until its save reload/conflict policy handles notifications.

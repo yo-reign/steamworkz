@@ -41,6 +41,11 @@ Recorded 2026-10-19.
 - Accepted M1 commit: `fbd5131000b82b61ab36609415fb4585e4168add`, pushed to `main` and verified equal to the remote.
 - Its actual immutable archive hash is `steamworkz-0.1.0-y1J172fnBQBlVblT8pEFQj1UHx3ZBlxcG8QaDfFalEkR`.
 - The M1 pin is a test-baseline checkpoint, not the final M2–M4 feature revision for game migration.
+- Accepted M2 commit: `b41b7e4be92c78415c38dc1b98fa69737bbd2a84`, normally pushed and verified equal to remote main.
+- Its actual immutable package hash is `steamworkz-0.1.0-y1J17_I_CAB4GtAGgEIBlZwaWq_eQfR5cHrDEUH_IQq7`.
+- A fresh M2 URL/hash consumer passed build/install, negative probes, production linkage and runtime-byte checks without application execution.
+- M3 source is accepted after integrated checks, independent reviews and a narrow forwarding repair. Its publication gates remain pending at this source checkpoint.
+- M4 and the final game pin remain pending. Source acceptance and publication do not establish native-service or performance readiness.
 - Game implementation remains unchanged at the extraction baseline. Its README and a new migration record are uncommitted.
 - Extraction hashes and private execution logs stay outside the published repositories.
 
@@ -50,10 +55,10 @@ Recorded 2026-10-19.
 | --- | --- | --- |
 | M0: extraction/naming/external SDK | accepted | Focused checks, independent review, corrected evidence wording, active diagnostics, and source audit passed |
 | M1: permanent tests | accepted source | Integrated checks, independent reviews and source/archive audit passed; CI execution and non-host runtime remain separate gates |
-| M2: networking tools | accepted source | Integrated checks, independent review, scoped test repairs/recheck and fixed-source archive audit passed; publication checks and live/platform/performance readiness remain separate |
-| M3: platform/saves/input/progression | pending | Per-component ABI/lifecycle plans and isolated implementation |
+| M2: networking tools | accepted and published | Final source/index/archive and immutable-consumer gates passed; live/platform/performance readiness remains separate |
+| M3: platform/saves/input/progression | accepted source | Integrated gates, three independent reviews and scoped Input correction/re-review passed; final publication audits remain |
 | M4: content/voice/Remote Play/capture | pending | Per-component ABI/lifecycle plans and isolated implementation |
-| Remote package and game migration | partially verified | M0 and M1 immutable URL/hash consumers build; game migration and final feature revision remain pending |
+| Remote package and game migration | partially verified | M0, M1 and M2 immutable URL/hash consumers build; game migration and final feature revision remain pending |
 | Final acceptance/release record | pending | Integrated review, validation matrix, explicit residual release gates |
 
 ## Implementation topology and lane board
@@ -167,8 +172,55 @@ Twelve SDK-free injected-error controls reproduced the original cleanup failures
 Focused integrated tests then passed 17/17 in all four modes. The changed tests compiled/linked for all four targets without destination execution; both changed files passed active diagnostics.
 All other 43 source files and production code were unchanged. A scoped re-review found both findings resolved with no new defect.
 The parent reverified the fixed 45-file source and 42-member actual package, accepted M2 source, then copied the exact 24-path delta into main.
-The source/index/archive and actual immutable-consumer publication gates remain mandatory. Publication receipts are separate from this pre-publication source checkpoint.
+The parent completed final document-inclusive source, package, index and Git archive audits. The exact 24-path change contains 45 regular source files and 42 package members.
+Commit `b41b7e4` was normally pushed. Its actual immutable package matched the audited hash, and a fresh consumer passed build/install and negative probes.
+Both installed consumers retained the required production imports and callback sinks. Runtime bytes matched the SDK, with no wrapper C++ runtime dependency.
+These consumers and smoke programs were not executed. All 270 SDK input files remained unchanged.
 Live networking-tool behavior, non-host runtime and performance remain separate readiness gates. No M2 Steam session or CI dispatch occurred.
+
+The user paused after M2 publication, then resumed the approved work. M3 is active against the accepted M2 source.
+The parent read the completed SDK scout report, inspected SDK/web contracts and wrapper seams, and verified 45 unchanged planning inputs and all 270 SDK inputs.
+Nine ignored planning-cache files are retained separately. An inspected manifest names the ZLS build runner; generated state is not project-test evidence.
+The parent prepared shared optional-service ownership fields in a separate worktree. Five private Context tests passed in both Debug and ReleaseFast; active SDK-aware diagnostics and formatting/whitespace checks passed.
+Utilities, Input and cloud writers completed their isolated handoffs and ended checkout ownership. The parent read all reports and checked exact source/frozen-input/SDK hashes.
+Utilities added `src/Utils.zig` and `c/utils.{h,cpp}`. Input added `src/Input.zig` and `c/input.{h,cpp}`. Cloud changed only its three existing service files.
+The parent inspected all component code and selected evidence without repeating completed component matrices. Input and progression source inspection is complete.
+Utilities reports 15 tests per native mode, Input 12, and cloud 75 main-suite passes plus six intentional skips. These totals include imported tests, not only new cases.
+Component four-target links and inert native fixtures passed. Production probes and destination executables were not run.
+Input's standard predefined-macro findings were classified as false positives without suppression. One accidental empty artifact was preserved by an explicitly approved intact rename.
+Input's manifest paths now use a fully qualified lexical Windows policy, without filesystem access or a new encoding restriction.
+The parent prepared six shared progression schema files. Six focused value/event/request/session tests plus root discovery passed in Debug and ReleaseFast; active diagnostics were clean.
+The sequential progression writer completed `src/services.zig` and `c/services.{h,cpp}` and ended ownership. The parent verified its exact increment, 42 frozen inputs, SDK270 and selected artifacts.
+The parent created a separate integration checkout with exact component/schema overlays and current main progress documents. It refined enum output copying and utility test cleanup, then added shared callback, Client lifecycle, build, consumer and guard integration.
+Keyboard text is copied during matching dismissal conversion. Input uses explicit manual frame updates; default Client initialization/frame behavior stays unchanged.
+Write batches are owned hints, not transactions. Acquired batches must end before client close.
+Leaderboard capture uses a bounded owned row/detail prefix. Matching completion and complete native row access control later download admission.
+Uncertain cleanup blocks further downloads until a new session. No native release API or unbounded drain is invented.
+Initial Debug/ReleaseFast checks passed 24 focused Zig tests and four fixtures, including 1228 bounded core callback cases.
+All four native modes passed the offline test graph: 96 main passes and seven deliberate skips, plus two repeated lifecycle controls. The 98/105 aggregate is not 98 distinct main tests.
+Each mode covered eight native fixtures, five original fatal checks, 72 networking guards, 228 platform/batch guards, runner controls and consumer/probes.
+The first Debug aggregate failed only smoke compilation: its drain helper still used a const Client pointer. The one-signature repair passed a separate 5/5-step install check; unchanged Debug tests were not repeated.
+The other three modes passed 352/352 aggregate test/install steps. Four ReleaseFast target graphs passed 36/36 compile/link/install steps each, without destination execution.
+Inspection covered 104 artifacts: 16 production consumers, 56 SDK-free fixtures/guards and other fixtures/smoke outputs. The main consumers retained 76 required native imports; runtime copies matched SDK bytes and no wrapper C++ runtime was found.
+The first external linkage assertion used two incorrect expected Utils symbol names. Correct SDK-derived names passed against unchanged binaries; both inspection attempts remain retained.
+Twenty-five changed code/build/checker paths passed active SDK-aware diagnostics. The libc-only core fixture's C++ printing-style finding remains explicitly inapplicable, not suppressed in source.
+Compiler-emitted constants for all four targets measured Zig Event at 28,856 bytes and private SwEvent at 28,848 bytes. No target execution or performance claim follows from these sizes.
+Source inventory now contains 52 owned files. Synthetic Windows path fixtures were adjusted without changing their values or weakening the source checker.
+The actual fetched package contained 49 members from 52 source inputs. Relocated ReleaseFast tests/install passed 352/352 steps.
+An independent archive/hash consumer built and installed successfully. Only its inspected pure main ran; native-backed exports and smoke remained unexecuted.
+Normal and optimized-Python checker controls passed. Runtime copies matched the external SDK, whose exact 270-file membership and bytes remain unchanged.
+Three independent read-only reviews completed against the frozen candidate. Completion/resource ownership found no issues; distribution review found no defect and stated its evidence limits.
+Utils/Input review identified one P1 forwarding discrepancy: RunFrame passed false although SDK 1.65 declares a true reserved default. No physical-input failure was demonstrated.
+After all reviewers ended ownership, the parent changed only c/input.cpp: the argument, fixture expectation and a contract comment.
+The corrected assertion rejects the original call with SIGABRT in Debug and ReleaseFast, without Steam linkage.
+Fixed focused graphs passed 7/7 steps, 24 tests and one deliberate skipped fatal body, plus the Input fixture, in both modes.
+Four-target fixture compile/link and production consumer installation passed. Twelve new artifacts retained the required native imports and SDK-free fixture boundary; installed runtimes matched the SDK.
+An initial inspection incorrectly required incidental Mach-O lobby imports on ELF. Same-format baseline comparisons passed against unchanged binaries without another build.
+Two pi-lens probes timed out and remain inconclusive. Separate SDK-aware production/fixture clangd LSP probes completed with no findings.
+The changed actual package audit passed with 52 sources and 49 members. Unchanged complete matrices were not repeated.
+A fresh scoped reviewer confirmed the original P1 is resolved, with no new issue. The parent read the report and rechecked all 52 corrected source hashes and empty index.
+The parent accepted M3 source on 2026-10-20. Final document-inclusive package, indexed-source, Git archive and real immutable-consumer checks remain publication gates.
+No M3 native-service execution, CI dispatch or performance evidence is established.
 
 Later writer lanes must record exclusive files/contracts, isolation paths, required gates, and a durable handoff before launch.
 Use separate worktrees for concurrent mutation.
@@ -236,7 +288,14 @@ Do not silently replace a failed subagent with another execution protocol.
 | M2 linkage and diagnostics | Retained artifacts and changed integrated paths | 77 artifact inspections, including 20 consumers/33 SDK-free artifacts; production imports/sinks present and no wrapper C++ runtime; 20 active SDK-aware diagnostic paths clean |
 | M2 actual package consumption | 45 source files and 42 archive members | Relocated ReleaseFast graph and independent archive/hash consumer/probes passed; only inspected pure main ran; runtime bytes matched |
 | M2 independent review and fixes | Runtime and package/build reviews plus two owning-file test repairs | Package review OK; both runtime P2 cleanup findings fixed; 12 injected-error controls, 17 focused tests in each mode, four-target changed-test links and active diagnostics passed; scoped re-review OK |
-| M2 source acceptance | Fixed candidate and main integration | Exact fixed-source/archive audit passed; 270 SDK files unchanged; 24 reviewed paths copied into main; final publication checks remain mandatory |
+| M2 source acceptance | Fixed candidate and main integration | Exact fixed-source/archive audit passed; 270 SDK files unchanged; 24 reviewed paths copied into main |
+| M2 publication | Commit `b41b7e4`, tree `bc753d13a1f661c196c390e76636a823127e9d71` | Final 45-file indexed/Git archive inputs matched the audited source; normal push and remote equality passed |
+| M2 immutable consumer | Actual 42-member package and fresh URL/hash dependency | Exact package hash matched; Debug build/install, negative probes, imports/sink retention and runtime-byte checks passed; no consumer or smoke execution |
+| M3 integrated offline graph | Candidate before the final one-file Input correction; four native modes | 96 main passes/seven skips plus two repeated controls, eight fixtures and 228 platform/batch guards per mode; Debug tests and repaired smoke install have separate successful records |
+| M3 target/linkage/package gates | Integrated candidate and actual 52-source/49-member package | Four 36/36 compile/link/install graphs, 104 artifact inspections, relocated tests/install and archive/hash consumer passed; only pure consumer main ran |
+| M3 independent reviews | Completion ownership, Utils/Input and distribution | One P1 reserved-argument forwarding discrepancy found; no other defect reported |
+| M3 Input correction | Only c/input.cpp changed after broad review | Two negative controls, focused Debug/ReleaseFast tests, four-target fixture/consumer links, 12 artifact inspections, direct SDK-aware LSP and changed package audit passed; scoped re-review OK |
+| M3 source acceptance | Corrected 52-file candidate, 2026-10-20 | All reports read and corrected hashes checked; final document-inclusive publication audits remain; no native/device/performance readiness claim |
 | Game dependency migration | Remote URL/hash | Source migration and final feature revision remain pending; game changes stay uncommitted |
 
 ## Tooling observations

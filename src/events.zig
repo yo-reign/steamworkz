@@ -3,6 +3,8 @@ const c = @import("native.zig").c;
 const types = @import("types.zig");
 const Networking = @import("Networking.zig");
 const Lobbies = @import("Lobbies.zig");
+const Utils = @import("Utils.zig");
+const Input = @import("Input.zig");
 const SteamId = types.SteamId;
 const AppId = types.AppId;
 const Result = types.Result;
@@ -75,6 +77,27 @@ pub const Event = struct {
         cloud_written: Result,
         /// Steam evicted this user's stats; request them again before reading.
         stats_unloaded: SteamId,
+        achievement_icon: struct {
+            game: u64,
+            name: [128]u8,
+            achieved: bool,
+            image: types.ImageHandle,
+            /// Borrows bounded owned bytes. Initial icon zero does not prove readiness.
+            pub fn nameText(self: *const @This()) []const u8 {
+                return types.text(&self.name);
+            }
+        },
+        leaderboard_found: struct { leaderboard: types.Leaderboard, found: bool },
+        leaderboard_entries: types.LeaderboardEntries,
+        leaderboard_uploaded: struct { leaderboard: types.Leaderboard, success: bool, score: i32, changed: bool, rank_new: i32, rank_previous: i32 },
+        global_percentages_ready: struct { game: u64, result: Result },
+        gamepad_dismissed: struct { app: AppId, submitted: bool, matched: bool, capture: Utils.GamepadText },
+        floating_dismissed,
+        resumed,
+        /// Notification only. Copy the current cloud change list before another pump.
+        cloud_changed,
+        input_connected: Input.Controller,
+        input_disconnected: Input.Controller,
     },
 };
 
@@ -127,9 +150,182 @@ pub fn decode(native: *const c.SwEvent) Event {
             c.SW_STATS_UNLOADED => .{ .stats_unloaded = @enumFromInt(d.stats.user) },
             c.SW_ACHIEVEMENT_STORED => .{ .achievement_stored = .{ .game = d.achievement.game, .name = d.achievement.name, .current = d.achievement.current, .maximum = d.achievement.maximum, .group = d.achievement.group != 0 } },
             c.SW_CLOUD_WRITTEN => .{ .cloud_written = @enumFromInt(d.cloud.result) },
+            c.SW_ACHIEVEMENT_ICON => .{ .achievement_icon = .{ .game = d.achievement_icon.game, .name = d.achievement_icon.name, .achieved = d.achievement_icon.achieved != 0, .image = @enumFromInt(d.achievement_icon.image) } },
+            c.SW_LEADERBOARD_FOUND => .{ .leaderboard_found = .{ .leaderboard = @enumFromInt(d.leaderboard_found.leaderboard), .found = d.leaderboard_found.found != 0 } },
+            c.SW_LEADERBOARD_ENTRIES => blk: {
+                const snapshot = leaderboardEntries(d.leaderboard_download.leaderboard, &d.leaderboard_download.capture) orelse break :blk .malformed;
+                break :blk .{ .leaderboard_entries = snapshot };
+            },
+            c.SW_LEADERBOARD_UPLOADED => .{ .leaderboard_uploaded = .{ .leaderboard = @enumFromInt(d.leaderboard_upload.leaderboard), .success = d.leaderboard_upload.success != 0, .score = d.leaderboard_upload.score, .changed = d.leaderboard_upload.changed != 0, .rank_new = d.leaderboard_upload.rank_new, .rank_previous = d.leaderboard_upload.rank_previous } },
+            c.SW_GLOBAL_PERCENTAGES_READY => .{ .global_percentages_ready = .{ .game = d.global_percentages.game, .result = @enumFromInt(d.global_percentages.result) } },
+            c.SW_GAMEPAD_DISMISSED => blk: {
+                const capture = gamepadText(&d.gamepad.capture) orelse break :blk .malformed;
+                break :blk .{ .gamepad_dismissed = .{ .app = @enumFromInt(d.gamepad.app), .submitted = d.gamepad.submitted != 0, .matched = d.gamepad.matched != 0, .capture = capture } };
+            },
+            c.SW_FLOATING_DISMISSED => .floating_dismissed,
+            c.SW_RESUMED => .resumed,
+            c.SW_CLOUD_CHANGED => .cloud_changed,
+            c.SW_INPUT_CONNECTED => .{ .input_connected = @enumFromInt(d.input_device.controller) },
+            c.SW_INPUT_DISCONNECTED => .{ .input_disconnected = @enumFromInt(d.input_device.controller) },
             else => .unhandled,
         },
     };
+}
+
+fn gamepadText(raw: *const c.SwUtilsTextCapture) ?Utils.GamepadText {
+    if (raw.copied_length >= Utils.GamepadText.capacity) return null;
+    if (raw.status == c.SW_UTILS_TEXT_COMPLETE and (raw.queried_length == 0 or raw.queried_length > Utils.GamepadText.capacity or raw.queried_length != raw.reported_length or raw.copied_length >= raw.queried_length or raw.bytes[raw.copied_length] != 0)) return null;
+    return .{ .status = @enumFromInt(raw.status), .reported_length = raw.reported_length, .queried_length = raw.queried_length, .copied_length = raw.copied_length, .bytes = raw.bytes };
+}
+
+test "platform events own keyboard bytes and preserve unmatched metadata" {
+    var raw = std.mem.zeroes(c.SwEvent);
+    raw.kind = c.SW_GAMEPAD_DISMISSED;
+    raw.data.gamepad.app = 73;
+    raw.data.gamepad.submitted = 1;
+    raw.data.gamepad.matched = 1;
+    const capture = &raw.data.gamepad.capture;
+    capture.status = c.SW_UTILS_TEXT_COMPLETE;
+    capture.reported_length = 4;
+    capture.queried_length = 4;
+    capture.copied_length = 3;
+    @memcpy(capture.bytes[0..4], "own\x00");
+    const event = decode(&raw);
+    @memset(&capture.bytes, 0);
+    try std.testing.expectEqualStrings("own", event.payload.gamepad_dismissed.capture.text().?);
+    try std.testing.expect(event.payload.gamepad_dismissed.matched and event.payload.gamepad_dismissed.submitted);
+    try std.testing.expectEqual(@as(u32, 73), @intFromEnum(event.payload.gamepad_dismissed.app));
+    capture.status = c.SW_UTILS_TEXT_UNTRACKED;
+    capture.reported_length = std.math.maxInt(u32);
+    capture.queried_length = 0;
+    capture.copied_length = 0;
+    raw.data.gamepad.matched = 0;
+    const untracked = decode(&raw).payload.gamepad_dismissed;
+    try std.testing.expect(untracked.capture.status == .untracked and untracked.capture.text() == null and !untracked.matched);
+    try std.testing.expectEqual(std.math.maxInt(u32), untracked.capture.reported_length);
+    capture.status = 123456;
+    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(decode(&raw).payload.gamepad_dismissed.capture.status));
+    capture.copied_length = Utils.GamepadText.capacity;
+    try std.testing.expect(decode(&raw).payload == .malformed);
+    capture.copied_length = 0;
+    capture.status = c.SW_UTILS_TEXT_COMPLETE;
+    try std.testing.expect(decode(&raw).payload == .malformed);
+    raw.kind = c.SW_INPUT_CONNECTED;
+    raw.data.input_device.controller = std.math.maxInt(u64);
+    try std.testing.expectEqual(std.math.maxInt(u64), @intFromEnum(decode(&raw).payload.input_connected));
+    raw.kind = c.SW_INPUT_DISCONNECTED;
+    try std.testing.expectEqual(std.math.maxInt(u64), @intFromEnum(decode(&raw).payload.input_disconnected));
+    inline for (.{ .{ c.SW_FLOATING_DISMISSED, .floating_dismissed }, .{ c.SW_RESUMED, .resumed }, .{ c.SW_CLOUD_CHANGED, .cloud_changed } }) |pair| {
+        raw.kind = pair[0];
+        try std.testing.expectEqual(pair[1], std.meta.activeTag(decode(&raw).payload));
+    }
+}
+
+fn leaderboardEntries(board: u64, raw: *const c.SwLeaderboardEntries) ?types.LeaderboardEntries {
+    if (raw.copied_count > types.LeaderboardEntries.max_entries) return null;
+    if (raw.copied_count != 0 and (raw.reported_count < 0 or raw.copied_count > raw.reported_count)) return null;
+    var result: types.LeaderboardEntries = .{
+        .leaderboard = @enumFromInt(board),
+        .status = @enumFromInt(raw.status),
+        .reported_count = raw.reported_count,
+        .copied_count = raw.copied_count,
+        .failure_index = raw.failure_index,
+        .reported_details = raw.reported_details,
+        .all_rows_accessed = raw.all_rows_accessed != 0,
+    };
+    for (raw.entries[0..raw.copied_count], result.entry_values[0..raw.copied_count]) |*source, *entry| {
+        if (source.detail_count > types.LeaderboardEntry.max_details) return null;
+        entry.* = .{ .user = @enumFromInt(source.user), .global_rank = source.global_rank, .score = source.score, .ugc = source.ugc, .detail_count = source.detail_count };
+        @memcpy(entry.detail_values[0..source.detail_count], source.details[0..source.detail_count]);
+    }
+    return result;
+}
+
+test "leaderboard events own bounded rows and details independently of native storage" {
+    var native = std.mem.zeroes(c.SwEvent);
+    native.kind = c.SW_LEADERBOARD_ENTRIES;
+    native.call = 71;
+    native.callback_id = 1105;
+    native.data.leaderboard_download.leaderboard = 83;
+    const capture = &native.data.leaderboard_download.capture;
+    capture.status = c.SW_LEADERBOARD_CAPTURE_COMPLETE;
+    capture.reported_count = 1;
+    capture.copied_count = 1;
+    capture.failure_index = -1;
+    capture.all_rows_accessed = 1;
+    capture.entries[0].user = 97;
+    capture.entries[0].global_rank = -5;
+    capture.entries[0].score = std.math.minInt(i32);
+    capture.entries[0].ugc = std.math.maxInt(u64);
+    capture.entries[0].detail_count = types.LeaderboardEntry.max_details;
+    for (&capture.entries[0].details, 0..) |*value, index| value.* = @as(i32, @intCast(index)) - 31;
+    const event = decode(&native);
+    @memset(std.mem.asBytes(&native), 0);
+    try std.testing.expectEqual(@as(u64, 71), @intFromEnum(event.call));
+    try std.testing.expectEqual(@as(i32, 1105), event.callback_id);
+    const result = &event.payload.leaderboard_entries;
+    try std.testing.expectEqual(@as(u64, 83), @intFromEnum(result.leaderboard));
+    try std.testing.expect(result.all_rows_accessed);
+    try std.testing.expectEqual(@as(usize, 1), result.entries().len);
+    const row = &result.entries()[0];
+    try std.testing.expectEqual(@as(u64, 97), @intFromEnum(row.user));
+    try std.testing.expectEqual(@as(i32, -5), row.global_rank);
+    try std.testing.expectEqual(std.math.minInt(i32), row.score);
+    try std.testing.expectEqual(std.math.maxInt(u64), row.ugc);
+    for (row.details(), 0..) |value, index| try std.testing.expectEqual(@as(i32, @intCast(index)) - 31, value);
+}
+
+test "leaderboard conversion rejects invalid published bounds but retains capture failures" {
+    var raw = std.mem.zeroes(c.SwLeaderboardEntries);
+    raw.status = c.SW_LEADERBOARD_CAPTURE_INVALID_COUNT;
+    raw.reported_count = -9;
+    raw.failure_index = -1;
+    const failed = leaderboardEntries(7, &raw).?;
+    try std.testing.expectEqual(@as(i32, -9), failed.reported_count);
+    try std.testing.expect(failed.status == .invalid_count);
+    try std.testing.expectEqual(@as(usize, 0), failed.entries().len);
+    raw.status = 123456;
+    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(leaderboardEntries(7, &raw).?.status));
+    raw.copied_count = 1;
+    try std.testing.expect(leaderboardEntries(7, &raw) == null);
+    raw.reported_count = 1;
+    raw.entries[0].detail_count = types.LeaderboardEntry.max_details + 1;
+    try std.testing.expect(leaderboardEntries(7, &raw) == null);
+    raw.entries[0].detail_count = 0;
+    try std.testing.expect(leaderboardEntries(7, &raw) != null);
+    raw.copied_count = types.LeaderboardEntries.max_entries + 1;
+    try std.testing.expect(leaderboardEntries(7, &raw) == null);
+}
+
+test "progression event fields preserve operation failure, signed values and bounded icon names" {
+    var native = std.mem.zeroes(c.SwEvent);
+    native.kind = c.SW_ACHIEVEMENT_ICON;
+    native.data.achievement_icon.game = std.math.maxInt(u64);
+    @memset(&native.data.achievement_icon.name, 'x');
+    native.data.achievement_icon.image = 17;
+    native.data.achievement_icon.achieved = 1;
+    const icon = decode(&native).payload.achievement_icon;
+    try std.testing.expectEqual(native.data.achievement_icon.name.len, icon.nameText().len);
+    try std.testing.expectEqual(std.math.maxInt(u64), icon.game);
+    try std.testing.expect(icon.achieved);
+    try std.testing.expectEqual(@as(i32, 17), @intFromEnum(icon.image));
+    native.kind = c.SW_LEADERBOARD_FOUND;
+    native.data.leaderboard_found = .{ .leaderboard = 19, .found = 0 };
+    const found = decode(&native).payload.leaderboard_found;
+    try std.testing.expect(!found.found);
+    try std.testing.expectEqual(@as(u64, 19), @intFromEnum(found.leaderboard));
+    native.kind = c.SW_LEADERBOARD_UPLOADED;
+    native.data.leaderboard_upload = .{ .leaderboard = 23, .success = 0, .score = -31, .changed = 1, .rank_new = -2, .rank_previous = 0 };
+    const upload = decode(&native).payload.leaderboard_uploaded;
+    try std.testing.expect(!upload.success and upload.changed);
+    try std.testing.expectEqual(@as(i32, -31), upload.score);
+    try std.testing.expectEqual(@as(i32, -2), upload.rank_new);
+    try std.testing.expectEqual(@as(i32, 0), upload.rank_previous);
+    native.kind = c.SW_GLOBAL_PERCENTAGES_READY;
+    native.data.global_percentages = .{ .game = 29, .result = 123456 };
+    const percentages = decode(&native).payload.global_percentages_ready;
+    try std.testing.expectEqual(@as(u64, 29), percentages.game);
+    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(percentages.result));
 }
 
 test "events own strings and retain call correlation and unknown result codes" {

@@ -18,6 +18,13 @@ static ISteamApps *const apps = reinterpret_cast<ISteamApps *>(&apps_token);
 static ISteamUserStats *const stats = reinterpret_cast<ISteamUserStats *>(&stats_token);
 static ISteamRemoteStorage *const cloud = reinterpret_cast<ISteamRemoteStorage *>(&cloud_token);
 static unsigned calls, accessors;
+static bool cloud_available = true;
+static bool stats_available = true;
+static int32 local_count = 1;
+static char local_path[32] = "save.dat";
+static const char *local_result = local_path;
+static ERemoteStorageLocalFileChange local_change = k_ERemoteStorageLocalFileChange_FileUpdated;
+static ERemoteStorageFilePathType local_path_type = k_ERemoteStorageFilePathType_Absolute;
 static const char *last_call;
 #define OBSERVE(interface) do { CHECK(self == interface); ++calls; last_call = __func__; } while (0)
 static constexpr uint64_steamid user = 0xfedcba9876543210ULL;
@@ -49,8 +56,8 @@ static const uint8 binary[] = { 0x41, 0, 0xff, 0x7f, 0x42 };
 STUB(ISteamFriends *, SteamFriends, ()) { ++accessors; return friends; }
 STUB(ISteamUtils *, SteamUtils, ()) { ++accessors; return utils; }
 STUB(ISteamApps *, SteamApps, ()) { ++accessors; return apps; }
-STUB(ISteamUserStats *, SteamUserStats, ()) { ++accessors; return stats; }
-STUB(ISteamRemoteStorage *, SteamRemoteStorage, ()) { ++accessors; return cloud; }
+STUB(ISteamUserStats *, SteamUserStats, ()) { ++accessors; return stats_available ? stats : nullptr; }
+STUB(ISteamRemoteStorage *, SteamRemoteStorage, ()) { ++accessors; return cloud_available ? cloud : nullptr; }
 
 STUB(const char *, ISteamFriends_GetPersonaName, (ISteamFriends *self)) { OBSERVE(friends); return returned_text; }
 STUB(int, ISteamFriends_GetFriendCount, (ISteamFriends *self, int flags)) { OBSERVE(friends); CHECK(flags == k_EFriendFlagImmediate); return 3; }
@@ -153,12 +160,108 @@ STUB(const char *, ISteamRemoteStorage_GetFileNameAndSize, (ISteamRemoteStorage 
     OBSERVE(cloud); CHECK(index == 2 && size == int_output);
     if (ok) *size = sizeof(binary); return ok ? returned_text : nullptr;
 }
+STUB(int32, ISteamRemoteStorage_GetLocalFileChangeCount, (ISteamRemoteStorage *self)) { OBSERVE(cloud); return local_count; }
+STUB(const char *, ISteamRemoteStorage_GetLocalFileChange, (ISteamRemoteStorage *self, int index, ERemoteStorageLocalFileChange *change, ERemoteStorageFilePathType *path_type)) {
+    OBSERVE(cloud); CHECK(index == 0); *change = local_change; *path_type = local_path_type; return local_result;
+}
+STUB(bool, ISteamRemoteStorage_BeginFileWriteBatch, (ISteamRemoteStorage *self)) { OBSERVE(cloud); return ok; }
+STUB(bool, ISteamRemoteStorage_EndFileWriteBatch, (ISteamRemoteStorage *self)) { OBSERVE(cloud); return ok; }
+static constexpr SteamLeaderboard_t board = 0xf123456789abcdefULL;
+static constexpr SteamLeaderboardEntries_t entry_set = 0xe123456789abcdefULL;
+static int icon;
+static char board_name[128] = "board";
+static const char *board_name_result = board_name;
+static ELeaderboardSortMethod sort_result = k_ELeaderboardSortMethodDescending;
+static ELeaderboardDisplayType display_result = k_ELeaderboardDisplayTypeTimeMilliSeconds;
+static int expected_first, expected_last, expected_users, expected_detail_count;
+static bool expected_around, expected_force;
+static int32 expected_score;
+static uint64_t expected_ids[100];
+static int32 expected_details[64];
+static LeaderboardEntry_t stored_rows[100];
+static int32 stored_details[100][64];
+static int store_count, row_calls, failed_row = -1, second_failed_row = -1;
+static bool store_valid;
+static int percentage_iterator, expected_previous;
+static int percentage_name_mode; // 0 normal, 1 empty, 2 full terminated, 3 unterminated, 4 unwritten
+static uint32 percentage_bits = 0x7fc12345U;
+STUB(int, ISteamUserStats_GetAchievementIcon, (ISteamUserStats *self, const char *name)) { OBSERVE(stats); CHECK(name == key); return icon; }
+STUB(SteamAPICall_t, ISteamUserStats_FindLeaderboard, (ISteamUserStats *self, const char *name)) { OBSERVE(stats); CHECK(name == key); return call; }
+STUB(const char *, ISteamUserStats_GetLeaderboardName, (ISteamUserStats *self, SteamLeaderboard_t id)) { OBSERVE(stats); CHECK(id == board); return board_name_result; }
+STUB(int, ISteamUserStats_GetLeaderboardEntryCount, (ISteamUserStats *self, SteamLeaderboard_t id)) { OBSERVE(stats); CHECK(id == board); memset(board_name, 'x', 5); return signed_value; }
+STUB(ELeaderboardSortMethod, ISteamUserStats_GetLeaderboardSortMethod, (ISteamUserStats *self, SteamLeaderboard_t id)) { OBSERVE(stats); CHECK(id == board); return sort_result; }
+STUB(ELeaderboardDisplayType, ISteamUserStats_GetLeaderboardDisplayType, (ISteamUserStats *self, SteamLeaderboard_t id)) { OBSERVE(stats); CHECK(id == board); return display_result; }
+STUB(SteamAPICall_t, ISteamUserStats_DownloadLeaderboardEntries, (ISteamUserStats *self, SteamLeaderboard_t id, ELeaderboardDataRequest request, int first, int last)) {
+    OBSERVE(stats); CHECK(id == board && first == expected_first && last == expected_last);
+    CHECK(request == (expected_around ? k_ELeaderboardDataRequestGlobalAroundUser : k_ELeaderboardDataRequestGlobal)); return call;
+}
+STUB(SteamAPICall_t, ISteamUserStats_DownloadLeaderboardEntriesForUsers, (ISteamUserStats *self, SteamLeaderboard_t id, CSteamID *users, int count)) {
+    OBSERVE(stats); CHECK(id == board && count == expected_users);
+    for (int i = 0; i < count; ++i) CHECK(users[i].ConvertToUint64() == expected_ids[i]); return call;
+}
+STUB(SteamAPICall_t, ISteamUserStats_UploadLeaderboardScore, (ISteamUserStats *self, SteamLeaderboard_t id, ELeaderboardUploadScoreMethod method, int32 score, const int32 *details, int count)) {
+    OBSERVE(stats); CHECK(id == board && score == expected_score && count == expected_detail_count);
+    CHECK(method == (expected_force ? k_ELeaderboardUploadScoreMethodForceUpdate : k_ELeaderboardUploadScoreMethodKeepBest));
+    if (!count) CHECK(details == nullptr);
+    for (int i = 0; i < count; ++i) CHECK(details[i] == expected_details[i]); return call;
+}
+STUB(bool, ISteamUserStats_GetDownloadedLeaderboardEntry, (ISteamUserStats *self, SteamLeaderboardEntries_t entries, int index, LeaderboardEntry_t *row, int32 *details, int maximum)) {
+    OBSERVE(stats); CHECK(entries == entry_set && store_valid && index == row_calls && index < store_count && maximum == 64);
+    CHECK(row->m_nScore == 0 && row->m_cDetails == 0);
+    for (int i = 0; i < 64; ++i) CHECK(details[i] == 0);
+    ++row_calls;
+    if (index == failed_row || index == second_failed_row) {
+        row->m_cDetails = -999; row->m_nScore = 999; details[0] = 999; return false;
+    }
+    *row = stored_rows[index]; memcpy(details, stored_details[index], sizeof(stored_details[index]));
+    if (row_calls == store_count && failed_row < 0 && second_failed_row < 0) {
+        store_valid = false;
+        // Outputs are caller-owned, while the most recent native set expires.
+        memset(stored_details, 0xcc, sizeof(stored_details));
+        for (int i = 0; i < store_count; ++i) stored_rows[i] = {};
+    }
+    return true;
+}
+STUB(SteamAPICall_t, ISteamUserStats_RequestGlobalAchievementPercentages, (ISteamUserStats *self)) { OBSERVE(stats); return call; }
+static int percentage_output(char *name, uint32 size, float *percent, bool *achieved) {
+    CHECK(size == 128);
+    for (uint32 i = 0; i < size; ++i) CHECK(static_cast<unsigned char>(name[i]) == 0xa5);
+    if (percentage_name_mode == 0) memcpy(name, "achievement", 12);
+    if (percentage_name_mode == 1) name[0] = 0;
+    if (percentage_name_mode == 2) { memset(name, 'a', size); name[size - 1] = 0; }
+    if (percentage_name_mode == 3) memset(name, 'b', size);
+    memcpy(percent, &percentage_bits, sizeof(*percent)); *achieved = output_bool; return percentage_iterator;
+}
+STUB(int, ISteamUserStats_GetMostAchievedAchievementInfo, (ISteamUserStats *self, char *name, uint32 size, float *percent, bool *achieved)) {
+    OBSERVE(stats); return percentage_output(name, size, percent, achieved);
+}
+STUB(int, ISteamUserStats_GetNextMostAchievedAchievementInfo, (ISteamUserStats *self, int previous, char *name, uint32 size, float *percent, bool *achieved)) {
+    OBSERVE(stats); CHECK(previous == expected_previous); return percentage_output(name, size, percent, achieved);
+}
+STUB(bool, ISteamUserStats_GetAchievementAchievedPercent, (ISteamUserStats *self, const char *name, float *percent)) {
+    OBSERVE(stats); CHECK(name == key); memcpy(percent, &percentage_bits, sizeof(*percent)); return ok;
+}
+
 #undef OBSERVE
 #undef STUB
 } // namespace services_test
 
 // Substitution starts only after parsing official headers and type-checking all
 // local functions. Tokens stand in for opaque interfaces and are never read.
+#define SteamAPI_ISteamUserStats_GetAchievementIcon services_test::ISteamUserStats_GetAchievementIcon
+#define SteamAPI_ISteamUserStats_FindLeaderboard services_test::ISteamUserStats_FindLeaderboard
+#define SteamAPI_ISteamUserStats_GetLeaderboardName services_test::ISteamUserStats_GetLeaderboardName
+#define SteamAPI_ISteamUserStats_GetLeaderboardEntryCount services_test::ISteamUserStats_GetLeaderboardEntryCount
+#define SteamAPI_ISteamUserStats_GetLeaderboardSortMethod services_test::ISteamUserStats_GetLeaderboardSortMethod
+#define SteamAPI_ISteamUserStats_GetLeaderboardDisplayType services_test::ISteamUserStats_GetLeaderboardDisplayType
+#define SteamAPI_ISteamUserStats_DownloadLeaderboardEntries services_test::ISteamUserStats_DownloadLeaderboardEntries
+#define SteamAPI_ISteamUserStats_DownloadLeaderboardEntriesForUsers services_test::ISteamUserStats_DownloadLeaderboardEntriesForUsers
+#define SteamAPI_ISteamUserStats_UploadLeaderboardScore services_test::ISteamUserStats_UploadLeaderboardScore
+#define SteamAPI_ISteamUserStats_GetDownloadedLeaderboardEntry services_test::ISteamUserStats_GetDownloadedLeaderboardEntry
+#define SteamAPI_ISteamUserStats_RequestGlobalAchievementPercentages services_test::ISteamUserStats_RequestGlobalAchievementPercentages
+#define SteamAPI_ISteamUserStats_GetMostAchievedAchievementInfo services_test::ISteamUserStats_GetMostAchievedAchievementInfo
+#define SteamAPI_ISteamUserStats_GetNextMostAchievedAchievementInfo services_test::ISteamUserStats_GetNextMostAchievedAchievementInfo
+#define SteamAPI_ISteamUserStats_GetAchievementAchievedPercent services_test::ISteamUserStats_GetAchievementAchievedPercent
 #define SteamAPI_SteamFriends services_test::SteamFriends
 #define SteamAPI_SteamUtils services_test::SteamUtils
 #define SteamAPI_SteamApps services_test::SteamApps
@@ -222,8 +325,17 @@ STUB(const char *, ISteamRemoteStorage_GetFileNameAndSize, (ISteamRemoteStorage 
 #define SteamAPI_ISteamRemoteStorage_GetQuota services_test::ISteamRemoteStorage_GetQuota
 #define SteamAPI_ISteamRemoteStorage_GetFileCount services_test::ISteamRemoteStorage_GetFileCount
 #define SteamAPI_ISteamRemoteStorage_GetFileNameAndSize services_test::ISteamRemoteStorage_GetFileNameAndSize
+#define SteamAPI_ISteamRemoteStorage_GetLocalFileChangeCount services_test::ISteamRemoteStorage_GetLocalFileChangeCount
+#define SteamAPI_ISteamRemoteStorage_GetLocalFileChange services_test::ISteamRemoteStorage_GetLocalFileChange
+#define SteamAPI_ISteamRemoteStorage_BeginFileWriteBatch services_test::ISteamRemoteStorage_BeginFileWriteBatch
+#define SteamAPI_ISteamRemoteStorage_EndFileWriteBatch services_test::ISteamRemoteStorage_EndFileWriteBatch
 #endif
 
+
+template <typename T> static int32_t enum_bits(const T &value) {
+    int32_t bits; static_assert(sizeof(value) == sizeof(bits), "Native enum width changed");
+    memcpy(&bits, &value, sizeof(bits)); return bits;
+}
 
 const char *sw_persona_name(void) { return SteamAPI_ISteamFriends_GetPersonaName(SteamAPI_SteamFriends()); }
 int32_t sw_friend_count(void) { return SteamAPI_ISteamFriends_GetFriendCount(SteamAPI_SteamFriends(), k_EFriendFlagImmediate); }
@@ -300,6 +412,125 @@ uint8_t sw_user_achievement(uint64_t user, const char *name, uint8_t *unlocked, 
     *unlocked = native_unlocked; return ok;
 }
 
+uint8_t sw_stats_achievement_icon(const char *name, int32_t *image) {
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return 0;
+    *image = SteamAPI_ISteamUserStats_GetAchievementIcon(stats, name); return 1;
+}
+uint8_t sw_stats_find_leaderboard(const char *name, uint64_t *call) {
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return 0;
+    *call = SteamAPI_ISteamUserStats_FindLeaderboard(stats, name); return 1;
+}
+uint8_t sw_stats_leaderboard_metadata_copy(uint64_t leaderboard, char *buffer, size_t capacity, sw_stats_leaderboard_metadata *out) {
+    *out = {};
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return SW_STATS_TEXT_UNAVAILABLE;
+    const char *const name = SteamAPI_ISteamUserStats_GetLeaderboardName(stats, leaderboard);
+    // Copy the borrowed name before any other native operation.
+    const bool present = name != nullptr;
+    out->name_length = present ? strlen(name) : 0;
+    if (present && out->name_length <= capacity && out->name_length) memcpy(buffer, name, out->name_length);
+    out->entry_count = SteamAPI_ISteamUserStats_GetLeaderboardEntryCount(stats, leaderboard);
+    out->sort = enum_bits(SteamAPI_ISteamUserStats_GetLeaderboardSortMethod(stats, leaderboard));
+    out->display = enum_bits(SteamAPI_ISteamUserStats_GetLeaderboardDisplayType(stats, leaderboard));
+    return !present ? SW_STATS_TEXT_NULL : out->name_length > capacity ? SW_STATS_TEXT_SHORT : SW_STATS_TEXT_OK;
+}
+uint8_t sw_stats_download(uint64_t leaderboard, uint8_t around, int32_t first, int32_t last, uint64_t *call) {
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return 0;
+    *call = SteamAPI_ISteamUserStats_DownloadLeaderboardEntries(stats, leaderboard,
+        around ? k_ELeaderboardDataRequestGlobalAroundUser : k_ELeaderboardDataRequestGlobal, first, last);
+    return 1;
+}
+uint8_t sw_stats_download_users(uint64_t leaderboard, const uint64_t *users, int32_t count, uint64_t *call) {
+    *call = 0;
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return 0;
+    if (count < 1 || count > SW_LEADERBOARD_MAX_ENTRIES) return 1;
+    CSteamID native_users[SW_LEADERBOARD_MAX_ENTRIES] = {};
+    for (int32_t i = 0; i < count; ++i) native_users[i] = CSteamID(static_cast<uint64>(users[i]));
+    *call = SteamAPI_ISteamUserStats_DownloadLeaderboardEntriesForUsers(stats, leaderboard, native_users, count);
+    return 1;
+}
+uint8_t sw_stats_upload(uint64_t leaderboard, uint8_t force, int32_t score, const int32_t *details, int32_t count, uint64_t *call) {
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return 0;
+    *call = SteamAPI_ISteamUserStats_UploadLeaderboardScore(stats, leaderboard,
+        force ? k_ELeaderboardUploadScoreMethodForceUpdate : k_ELeaderboardUploadScoreMethodKeepBest, score, count ? details : nullptr, count);
+    return 1;
+}
+void sw_stats_copy_leaderboard_entries(uint64_t entries, int32_t count, SwLeaderboardEntries *out) {
+    static_assert(SW_LEADERBOARD_MAX_DETAILS == k_cLeaderboardDetailsMax, "Leaderboard detail capacity changed");
+    *out = {};
+    out->reported_count = count;
+    out->failure_index = -1;
+    if (count < 0) { out->status = SW_LEADERBOARD_CAPTURE_INVALID_COUNT; return; }
+    if (count > SW_LEADERBOARD_MAX_ENTRIES) { out->status = SW_LEADERBOARD_CAPTURE_TOO_MANY_ROWS; return; }
+    if (count == 0) { out->all_rows_accessed = 1; return; }
+    if (!entries) { out->status = SW_LEADERBOARD_CAPTURE_INVALID_HANDLE; return; }
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) { out->status = SW_LEADERBOARD_CAPTURE_UNAVAILABLE; return; }
+    out->all_rows_accessed = 1;
+    for (int32_t i = 0; i < count; ++i) {
+        LeaderboardEntry_t row = {};
+        int32 details[SW_LEADERBOARD_MAX_DETAILS] = {};
+        const bool ok = SteamAPI_ISteamUserStats_GetDownloadedLeaderboardEntry(stats, entries, i, &row, details, SW_LEADERBOARD_MAX_DETAILS);
+        if (!ok) {
+            out->all_rows_accessed = 0;
+            if (out->failure_index == -1) { out->status = SW_LEADERBOARD_CAPTURE_ENTRY_FAILED; out->failure_index = i; }
+            continue;
+        }
+        if (row.m_cDetails < 0 || row.m_cDetails > SW_LEADERBOARD_MAX_DETAILS) {
+            if (out->failure_index == -1) {
+                out->status = SW_LEADERBOARD_CAPTURE_INVALID_DETAILS;
+                out->failure_index = i; out->reported_details = row.m_cDetails;
+            }
+            continue;
+        }
+        if (out->failure_index != -1) continue;
+        SwLeaderboardEntry &owned = out->entries[out->copied_count++];
+        owned.user = row.m_steamIDUser.ConvertToUint64();
+        owned.global_rank = row.m_nGlobalRank; owned.score = row.m_nScore;
+        owned.ugc = row.m_hUGC; owned.detail_count = static_cast<uint32_t>(row.m_cDetails);
+        if (row.m_cDetails) memcpy(owned.details, details, sizeof(int32) * row.m_cDetails);
+    }
+}
+uint8_t sw_stats_request_global_percentages(uint64_t *call) {
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return 0;
+    *call = SteamAPI_ISteamUserStats_RequestGlobalAchievementPercentages(stats); return 1;
+}
+uint8_t sw_stats_percentage_step(uint8_t first, int32_t previous, sw_stats_percentage *out) {
+    *out = {};
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return SW_STATS_PERCENTAGE_UNAVAILABLE;
+    char name[k_cchStatNameMax];
+    static_assert(sizeof(name) == sizeof(out->name), "Achievement name bound changed");
+    memset(name, 0xa5, sizeof(name));
+    float percent = 0; bool achieved = false;
+    const int iterator = first ? SteamAPI_ISteamUserStats_GetMostAchievedAchievementInfo(stats, name, sizeof(name), &percent, &achieved)
+        : SteamAPI_ISteamUserStats_GetNextMostAchievedAchievementInfo(stats, previous, name, sizeof(name), &percent, &achieved);
+    out->iterator = iterator;
+    if (iterator == -1) return SW_STATS_PERCENTAGE_END;
+    if (iterator < 0) return SW_STATS_PERCENTAGE_NEGATIVE;
+    const char *const end = static_cast<const char *>(memchr(name, 0, sizeof(name)));
+    if (!end) return SW_STATS_PERCENTAGE_UNTERMINATED;
+    out->name_length = static_cast<uint32_t>(end - name);
+    memcpy(out->name, name, out->name_length);
+    static_assert(sizeof(percent) == sizeof(out->percent_bits), "Float width changed");
+    memcpy(&out->percent_bits, &percent, sizeof(percent));
+    out->achieved = achieved;
+    return SW_STATS_PERCENTAGE_ITEM;
+}
+int32_t sw_stats_achievement_percentage(const char *name, uint32_t *percent_bits) {
+    ISteamUserStats *const stats = SteamAPI_SteamUserStats();
+    if (!stats) return -1;
+    float percent = 0;
+    if (!SteamAPI_ISteamUserStats_GetAchievementAchievedPercent(stats, name, &percent)) return 0;
+    memcpy(percent_bits, &percent, sizeof(percent)); return 1;
+}
+
 uint8_t sw_cloud_account_enabled(void) { return SteamAPI_ISteamRemoteStorage_IsCloudEnabledForAccount(SteamAPI_SteamRemoteStorage()); }
 uint8_t sw_cloud_app_enabled(void) { return SteamAPI_ISteamRemoteStorage_IsCloudEnabledForApp(SteamAPI_SteamRemoteStorage()); }
 uint8_t sw_cloud_exists(const char *name) { return SteamAPI_ISteamRemoteStorage_FileExists(SteamAPI_SteamRemoteStorage(), name); }
@@ -315,6 +546,39 @@ uint8_t sw_cloud_quota(uint64_t *total, uint64_t *available) {
 }
 int32_t sw_cloud_file_count(void) { return SteamAPI_ISteamRemoteStorage_GetFileCount(SteamAPI_SteamRemoteStorage()); }
 const char *sw_cloud_file_at(int32_t index, int32_t *size) { return SteamAPI_ISteamRemoteStorage_GetFileNameAndSize(SteamAPI_SteamRemoteStorage(), index, size); }
+
+uint8_t sw_cloud_local_change_count(int32_t *count) {
+    ISteamRemoteStorage *const storage = SteamAPI_SteamRemoteStorage();
+    if (!storage) return 0;
+    *count = SteamAPI_ISteamRemoteStorage_GetLocalFileChangeCount(storage);
+    return 1;
+}
+uint8_t sw_cloud_local_change_copy(int32_t index, char *buffer, size_t capacity, sw_cloud_local_change *out) {
+    *out = {};
+    ISteamRemoteStorage *const storage = SteamAPI_SteamRemoteStorage();
+    if (!storage) return SW_CLOUD_CHANGE_UNAVAILABLE;
+    const int32 count = SteamAPI_ISteamRemoteStorage_GetLocalFileChangeCount(storage);
+    if (count < 0) return SW_CLOUD_CHANGE_COUNT_FAILED;
+    if (index < 0 || index >= count) return SW_CLOUD_CHANGE_INVALID_INDEX;
+    ERemoteStorageLocalFileChange change = k_ERemoteStorageLocalFileChange_Invalid;
+    ERemoteStorageFilePathType path_type = k_ERemoteStorageFilePathType_Invalid;
+    const char *const path = SteamAPI_ISteamRemoteStorage_GetLocalFileChange(storage, index, &change, &path_type);
+    if (!path) return SW_CLOUD_CHANGE_NULL_PATH;
+    out->change = enum_bits(change);
+    out->path_type = enum_bits(path_type);
+    out->path_length = strlen(path);
+    if (out->path_length > capacity) return SW_CLOUD_CHANGE_SHORT_BUFFER;
+    if (out->path_length) memcpy(buffer, path, out->path_length);
+    return SW_CLOUD_CHANGE_OK;
+}
+int32_t sw_cloud_begin_write_batch(void) {
+    ISteamRemoteStorage *const storage = SteamAPI_SteamRemoteStorage();
+    return storage ? static_cast<int32_t>(SteamAPI_ISteamRemoteStorage_BeginFileWriteBatch(storage)) : -1;
+}
+int32_t sw_cloud_end_write_batch(void) {
+    ISteamRemoteStorage *const storage = SteamAPI_SteamRemoteStorage();
+    return storage ? static_cast<int32_t>(SteamAPI_ISteamRemoteStorage_EndFileWriteBatch(storage)) : -1;
+}
 
 #ifdef SW_SERVICES_TEST
 namespace services_test {
@@ -491,6 +755,203 @@ static void test_cloud() {
     call = k_uAPICallInvalid;
     EXPECT(ISteamRemoteStorage_FileWriteAsync, sw_cloud_write_async(key, binary, sizeof(binary)) == 0);
 }
+static void change_calls(unsigned expected) {
+    CHECK(calls == expected && accessors == 1);
+    calls = accessors = 0; last_call = nullptr;
+}
+static void test_cloud_coordination() {
+    int32_t count = 99;
+    const int32 counts[] = { -7, 0, 1 };
+    for (const int32 value : counts) {
+        local_count = value;
+        EXPECT(ISteamRemoteStorage_GetLocalFileChangeCount, sw_cloud_local_change_count(&count) == 1);
+        CHECK(count == value);
+    }
+    char buffer[32]; memset(buffer, 0xa5, sizeof(buffer));
+    sw_cloud_local_change out = {};
+    local_count = -1;
+    CHECK(sw_cloud_local_change_copy(0, buffer, sizeof(buffer), &out) == SW_CLOUD_CHANGE_COUNT_FAILED); change_calls(1);
+    local_count = 0;
+    CHECK(sw_cloud_local_change_copy(0, buffer, sizeof(buffer), &out) == SW_CLOUD_CHANGE_INVALID_INDEX); change_calls(1);
+    local_count = 1;
+    const int indices[] = { -1, 1, 2147483647 };
+    for (const int index : indices) {
+        CHECK(sw_cloud_local_change_copy(index, buffer, sizeof(buffer), &out) == SW_CLOUD_CHANGE_INVALID_INDEX); change_calls(1);
+    }
+    CHECK(sw_cloud_local_change_copy(0, buffer, 7, &out) == SW_CLOUD_CHANGE_SHORT_BUFFER); change_calls(2);
+    CHECK(out.path_length == 8 && static_cast<unsigned char>(buffer[0]) == 0xa5);
+    CHECK(sw_cloud_local_change_copy(0, buffer, 8, &out) == SW_CLOUD_CHANGE_OK); change_calls(2);
+    CHECK(out.path_length == 8 && out.change == 1 && out.path_type == 1 && memcmp(buffer, "save.dat", 8) == 0);
+    strcpy(local_path, "next.dat");
+    CHECK(memcmp(buffer, "save.dat", 8) == 0 && static_cast<unsigned char>(buffer[8]) == 0xa5);
+    local_change = k_ERemoteStorageLocalFileChange_FileDeleted;
+    local_path_type = k_ERemoteStorageFilePathType_APIFilename;
+    CHECK(sw_cloud_local_change_copy(0, buffer, sizeof(buffer), &out) == SW_CLOUD_CHANGE_OK); change_calls(2);
+    CHECK(out.change == 2 && out.path_type == 2 && memcmp(buffer, "next.dat", 8) == 0);
+    // Future numeric values are tested at the owned integer/Zig boundary.
+    local_change = k_ERemoteStorageLocalFileChange_Invalid;
+    local_path_type = k_ERemoteStorageFilePathType_Invalid;
+    local_result = "";
+    CHECK(sw_cloud_local_change_copy(0, nullptr, 0, &out) == SW_CLOUD_CHANGE_OK); change_calls(2);
+    CHECK(out.path_length == 0 && out.change == 0 && out.path_type == 0);
+    local_result = nullptr;
+    CHECK(sw_cloud_local_change_copy(0, buffer, sizeof(buffer), &out) == SW_CLOUD_CHANGE_NULL_PATH); change_calls(2);
+    for (const bool result : booleans) {
+        ok = result;
+        EXPECT(ISteamRemoteStorage_BeginFileWriteBatch, sw_cloud_begin_write_batch() == result);
+        EXPECT(ISteamRemoteStorage_EndFileWriteBatch, sw_cloud_end_write_batch() == result);
+    }
+    cloud_available = false;
+    CHECK(sw_cloud_local_change_count(&count) == 0); change_calls(0);
+    CHECK(sw_cloud_local_change_copy(0, buffer, sizeof(buffer), &out) == SW_CLOUD_CHANGE_UNAVAILABLE); change_calls(0);
+    CHECK(sw_cloud_begin_write_batch() == -1); change_calls(0);
+    CHECK(sw_cloud_end_write_batch() == -1); change_calls(0);
+    cloud_available = true;
+}
+static void reset_store(int count) {
+    store_count = count; row_calls = 0; failed_row = second_failed_row = -1; store_valid = true;
+    for (int i = 0; i < count; ++i) {
+        stored_rows[i] = {};
+        stored_rows[i].m_steamIDUser = CSteamID(user + i);
+        stored_rows[i].m_nGlobalRank = -i; stored_rows[i].m_nScore = signed_value + i;
+        stored_rows[i].m_hUGC = large_total + i; stored_rows[i].m_cDetails = i % 65;
+        for (int j = 0; j < 64; ++j) stored_details[i][j] = i * 100 - j;
+    }
+}
+static void check_prefix(const SwLeaderboardEntries &out, int count) {
+    CHECK(out.copied_count == static_cast<uint32_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const SwLeaderboardEntry &row = out.entries[i];
+        CHECK(row.user == user + i && row.global_rank == -i && row.score == signed_value + i && row.ugc == large_total + i);
+        CHECK(row.detail_count == static_cast<uint32_t>(i % 65));
+        for (uint32_t j = 0; j < row.detail_count; ++j) CHECK(row.details[j] == i * 100 - static_cast<int32_t>(j));
+    }
+    for (int i = count; i < 100; ++i) CHECK(out.entries[i].detail_count == 0 && out.entries[i].user == 0);
+}
+static void test_leaderboard_capture() {
+    SwLeaderboardEntries out;
+    const int invalid_counts[] = { -2147483647 - 1, -1, 101, 2147483647 };
+    for (const int n : invalid_counts) {
+        sw_stats_copy_leaderboard_entries(entry_set, n, &out);
+        CHECK(out.reported_count == n && out.failure_index == -1 && out.copied_count == 0 && !out.all_rows_accessed);
+        CHECK(out.status == (n < 0 ? SW_LEADERBOARD_CAPTURE_INVALID_COUNT : SW_LEADERBOARD_CAPTURE_TOO_MANY_ROWS));
+        CHECK(calls == 0 && accessors == 0);
+    }
+    stats_available = false;
+    sw_stats_copy_leaderboard_entries(0, 0, &out);
+    CHECK(out.status == SW_LEADERBOARD_CAPTURE_COMPLETE && out.all_rows_accessed && calls == 0 && accessors == 0);
+    sw_stats_copy_leaderboard_entries(0, 1, &out);
+    CHECK(out.status == SW_LEADERBOARD_CAPTURE_INVALID_HANDLE && !out.all_rows_accessed && calls == 0 && accessors == 0);
+    sw_stats_copy_leaderboard_entries(entry_set, 1, &out);
+    CHECK(out.status == SW_LEADERBOARD_CAPTURE_UNAVAILABLE && !out.all_rows_accessed); change_calls(0);
+    stats_available = true;
+    for (int n = 1; n <= 100; ++n) {
+        reset_store(n); sw_stats_copy_leaderboard_entries(entry_set, n, &out); change_calls(n);
+        CHECK(row_calls == n && !store_valid && out.status == SW_LEADERBOARD_CAPTURE_COMPLETE && out.all_rows_accessed && out.failure_index == -1);
+        check_prefix(out, n); // Includes last row, after final native access invalidated store.
+    }
+    for (int failure = 0; failure < 100; ++failure) {
+        reset_store(100); failed_row = failure;
+        sw_stats_copy_leaderboard_entries(entry_set, 100, &out); change_calls(100);
+        CHECK(row_calls == 100 && store_valid && out.status == SW_LEADERBOARD_CAPTURE_ENTRY_FAILED && !out.all_rows_accessed && out.failure_index == failure && out.reported_details == 0);
+        check_prefix(out, failure);
+        const int invalid_detail_counts[] = { -2147483647 - 1, -1, 65, 2147483647 };
+        for (const int invalid_details : invalid_detail_counts) {
+            reset_store(100); stored_rows[failure].m_cDetails = invalid_details;
+            sw_stats_copy_leaderboard_entries(entry_set, 100, &out); change_calls(100);
+            CHECK(row_calls == 100 && !store_valid && out.status == SW_LEADERBOARD_CAPTURE_INVALID_DETAILS && out.all_rows_accessed && out.failure_index == failure && out.reported_details == invalid_details);
+            check_prefix(out, failure);
+        }
+    }
+    // First error wins even when later cleanup fails or has invalid metadata.
+    reset_store(100); stored_rows[2].m_cDetails = 65; failed_row = 3; second_failed_row = 99;
+    sw_stats_copy_leaderboard_entries(entry_set, 100, &out); change_calls(100);
+    CHECK(out.status == SW_LEADERBOARD_CAPTURE_INVALID_DETAILS && out.failure_index == 2 && out.reported_details == 65 && !out.all_rows_accessed); check_prefix(out, 2);
+    reset_store(100); failed_row = 2; stored_rows[3].m_cDetails = -1;
+    sw_stats_copy_leaderboard_entries(entry_set, 100, &out); change_calls(100);
+    CHECK(out.status == SW_LEADERBOARD_CAPTURE_ENTRY_FAILED && out.failure_index == 2 && out.reported_details == 0 && !out.all_rows_accessed); check_prefix(out, 2);
+    // Every valid detail count, including 64 on the final row.
+    for (int n = 0; n <= 64; ++n) {
+        reset_store(1); stored_rows[0].m_cDetails = n;
+        sw_stats_copy_leaderboard_entries(entry_set, 1, &out); change_calls(1);
+        CHECK(out.copied_count == 1 && out.entries[0].detail_count == static_cast<uint32_t>(n) && !store_valid);
+        for (int j = 0; j < n; ++j) CHECK(out.entries[0].details[j] == -j);
+    }
+}
+static void test_progression() {
+    call = 0xe123456789abcdefULL;
+    uint64_t result = 0; int32_t image = -77;
+    for (const int value : avatar_results) {
+        icon = value; CHECK(sw_stats_achievement_icon(key, &image)); called("ISteamUserStats_GetAchievementIcon"); CHECK(image == value);
+    }
+    const uint64_t call_values[] = { 0, 0xe123456789abcdefULL };
+    for (const uint64_t value : call_values) {
+        call = value;
+        CHECK(sw_stats_find_leaderboard(key, &result)); called("ISteamUserStats_FindLeaderboard"); CHECK(result == value);
+        CHECK(sw_stats_request_global_percentages(&result)); called("ISteamUserStats_RequestGlobalAchievementPercentages"); CHECK(result == value);
+        for (const bool around : booleans) {
+            expected_around = around; expected_first = around ? -99 : 1; expected_last = around ? 0 : 100;
+            CHECK(sw_stats_download(board, around, expected_first, expected_last, &result)); called("ISteamUserStats_DownloadLeaderboardEntries"); CHECK(result == value);
+        }
+        for (int n = 1; n <= 100; ++n) {
+            expected_users = n;
+            for (int i = 0; i < n; ++i) expected_ids[i] = i % 3 == 0 ? 0 : user; // Includes exact duplicates/invalid IDs.
+            CHECK(sw_stats_download_users(board, expected_ids, n, &result)); called("ISteamUserStats_DownloadLeaderboardEntriesForUsers"); CHECK(result == value);
+        }
+        for (const bool force : booleans) for (int n = 0; n <= 64; ++n) {
+            expected_force = force; expected_detail_count = n; expected_score = force ? (-2147483647 - 1) : 2147483647;
+            for (int i = 0; i < n; ++i) expected_details[i] = -i;
+            CHECK(sw_stats_upload(board, force, expected_score, expected_details, n, &result)); called("ISteamUserStats_UploadLeaderboardScore"); CHECK(result == value);
+        }
+    }
+    char buffer[128]; memset(buffer, 0xa5, sizeof(buffer)); sw_stats_leaderboard_metadata metadata;
+    strcpy(board_name, "board"); board_name_result = board_name;
+    CHECK(sw_stats_leaderboard_metadata_copy(board, buffer, 4, &metadata) == SW_STATS_TEXT_SHORT); change_calls(4);
+    CHECK(metadata.name_length == 5 && static_cast<unsigned char>(buffer[0]) == 0xa5);
+    strcpy(board_name, "board");
+    CHECK(sw_stats_leaderboard_metadata_copy(board, buffer, 5, &metadata) == SW_STATS_TEXT_OK); change_calls(4);
+    CHECK(metadata.name_length == 5 && memcmp(buffer, "board", 5) == 0 && memcmp(board_name, "xxxxx", 5) == 0 && metadata.entry_count == signed_value && metadata.sort == 2 && metadata.display == 3);
+    // Sort's enumerators 0..2 permit 0..3. 3 is unknown but a valid enum value.
+    sort_result = static_cast<ELeaderboardSortMethod>(3);
+    board_name_result = "";
+    CHECK(sw_stats_leaderboard_metadata_copy(board, nullptr, 0, &metadata) == SW_STATS_TEXT_OK); change_calls(4); CHECK(metadata.name_length == 0 && metadata.sort == 3);
+    board_name_result = nullptr;
+    CHECK(sw_stats_leaderboard_metadata_copy(board, nullptr, 0, &metadata) == SW_STATS_TEXT_NULL); change_calls(4);
+    sw_stats_percentage percent;
+    const int iterators[] = { -2147483647 - 1, -2, -1, 0, 123456789, 2147483647 };
+    for (const int iterator : iterators) for (int mode = 0; mode <= 4; ++mode) for (const bool first : booleans) {
+        percentage_iterator = iterator; percentage_name_mode = mode; expected_previous = 123456789;
+        const uint8_t status = sw_stats_percentage_step(first, expected_previous, &percent);
+        called(first ? "ISteamUserStats_GetMostAchievedAchievementInfo" : "ISteamUserStats_GetNextMostAchievedAchievementInfo");
+        CHECK(percent.iterator == iterator);
+        CHECK(status == (iterator == -1 ? SW_STATS_PERCENTAGE_END : iterator < 0 ? SW_STATS_PERCENTAGE_NEGATIVE : mode >= 3 ? SW_STATS_PERCENTAGE_UNTERMINATED : SW_STATS_PERCENTAGE_ITEM));
+        if (status == SW_STATS_PERCENTAGE_ITEM) {
+            CHECK(percent.name_length == (mode == 0 ? 11U : mode == 1 ? 0U : 127U) && percent.percent_bits == percentage_bits && percent.achieved == output_bool);
+        } else CHECK(percent.name_length == 0 && percent.percent_bits == 0 && percent.achieved == 0);
+    }
+    const uint32 bits[] = { 0, 0x80000000U, 0x7fc12345U, 0x7f800000U, 0xff800000U, 0xc1234567U };
+    for (const uint32 value : bits) for (const bool success : booleans) {
+        percentage_bits = value; ok = success; uint32_t output = 0xabcdef01U;
+        CHECK(sw_stats_achievement_percentage(key, &output) == success); called("ISteamUserStats_GetAchievementAchievedPercent");
+        CHECK(output == (success ? value : 0xabcdef01U));
+        percentage_name_mode = 0; percentage_iterator = 0; output_bool = success;
+        CHECK(sw_stats_percentage_step(1, 0, &percent) == SW_STATS_PERCENTAGE_ITEM); called("ISteamUserStats_GetMostAchievedAchievementInfo");
+        CHECK(percent.percent_bits == value && percent.achieved == success);
+    }
+    stats_available = false;
+    CHECK(!sw_stats_achievement_icon(key, &image)); change_calls(0);
+    CHECK(!sw_stats_find_leaderboard(key, &result)); change_calls(0);
+    CHECK(sw_stats_leaderboard_metadata_copy(board, buffer, sizeof(buffer), &metadata) == SW_STATS_TEXT_UNAVAILABLE); change_calls(0);
+    CHECK(!sw_stats_download(board, 0, 1, 100, &result)); change_calls(0);
+    CHECK(!sw_stats_download_users(board, expected_ids, 1, &result)); change_calls(0);
+    CHECK(!sw_stats_upload(board, 0, 0, nullptr, 0, &result)); change_calls(0);
+    CHECK(!sw_stats_request_global_percentages(&result)); change_calls(0);
+    CHECK(sw_stats_percentage_step(1, 0, &percent) == SW_STATS_PERCENTAGE_UNAVAILABLE); change_calls(0);
+    uint32_t output = 99;
+    CHECK(sw_stats_achievement_percentage(key, &output) == -1 && output == 99); change_calls(0);
+    stats_available = true;
+}
+
 #undef EXPECT
 } // namespace services_test
 
@@ -500,7 +961,10 @@ int main() {
     services_test::test_apps();
     services_test::test_stats();
     services_test::test_cloud();
-    puts("services fixtures: friends, images, apps, stats, cloud passed (SDK calls substituted)");
+    services_test::test_cloud_coordination();
+    services_test::test_leaderboard_capture();
+    services_test::test_progression();
+    puts("services fixtures: progression, friends, images, apps, stats, cloud and coordination passed (SDK calls substituted)");
 }
 #undef CHECK
 #endif

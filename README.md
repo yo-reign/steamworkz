@@ -38,13 +38,16 @@ It does not require an additional C++ standard library.
 | Command | Effect |
 | --- | --- |
 | `zig build` | Compile/link the headless example; install it and the runtime |
-| `zig build test` | Run offline Zig tests, six C++ fixtures, lifecycle/networking guards, and the consumer/probes |
+| `zig build test` | Run offline Zig tests, eight C++ fixtures, lifecycle/networking/platform guards, and the consumer/probes |
 | `zig build test-core` / `test-services` | Run the focused native callback or inert service-adapter fixture |
 | `zig build test-lifecycle` | Check public fatal guards in separate bounded processes, with passing controls |
 | `zig build test-properties` | Run deterministic bounded parser/text/event properties |
 | `zig build test-networking-tools` | Run focused telemetry, configuration, simulation, capture, lane and batch Zig tests |
 | `zig build test-networking-config` / `test-networking-debug` | Run the new SDK-free native adapter fixtures |
 | `zig build test-networking-guards` | Check new API leases before empty, invalid and native paths in bounded SDK-free subprocesses |
+| `zig build test-platform-tools` | Run focused Utils, Input, cloud, progression and callback-ownership Zig tests |
+| `zig build test-utils` / `test-input` | Run SDK-free native adapter fixtures |
+| `zig build test-platform-guards` | Check new public leases and acquired cloud-batch close refusal in bounded SDK-free subprocesses |
 | `zig build test-compile -Dtarget=x86_64-linux-gnu` | Compile/link tests, fatal artifacts, runner, fixtures and consumer/probes without target execution |
 | `zig build test-consumer` | Compile/link/install a dependency consumer and check expected compile failures, without running the consumer |
 | `zig build live-test` | Explicitly initialize Steam and run the bounded live checks |
@@ -60,8 +63,8 @@ the package without command-line build options.
 `tests/consumer` is an independent project that uses `b.dependency`, the exported
 module, and both public runtime helpers. `test` and `test-compile` include this
 regression. It checks target, CPU model/features, optimization and SDK propagation.
-It retains uncalled initialization, shutdown and networking exports so optimized
-builds must link the production APIs. A second consumer never references capture;
+It retains uncalled initialization, shutdown, networking and platform/progression
+exports so optimized builds must link the production APIs. A second consumer never references capture;
 a linker retention check still requires the native trampoline's real Zig sink.
 Neither consumer registers a callback or runs those exports during these checks.
 The fixture also rejects unsupported request kinds and implicit integer image
@@ -175,7 +178,9 @@ including teardown, run on its initializing thread. Pure value helpers need no
 client call. Do not mix this client with another Steam wrapper,
 `SteamAPI_RunCallbacks`, `CCallback`, or `CCallResult`.
 
-`runFrame` fetches work; drain `nextEvent` afterward. Every event owns its payload.
+`runFrame` fetches work; drain `nextEvent` afterward. `nextEvent` needs a mutable
+Client because it updates keyboard and leaderboard ownership even if the caller
+discards an event. Every event owns its payload.
 The native callback is freed before the event returns. Draining to `null` also
 releases the calling thread's temporary Steam API memory. Unknown or malformed
 callbacks and call-result retrieval/I/O failures have explicit event variants.
@@ -427,7 +432,8 @@ connection, session or start-interval provenance. Do not use them as gameplay ev
 Stop disables admission before unregistering; failure never re-enables admission.
 Removal does not prove quiescence: admitted producers can finish afterward, and
 delayed old callbacks can arrive after restart. Client teardown disables capture
-before native shutdown, after checking outstanding received messages.
+before native shutdown, after checking outstanding received messages and cloud
+write batches. Optional keyboard and Input cleanup also runs while the lease is live.
 Callback code/storage must remain valid until process exit; dynamic unloading is
 unsupported. Facade methods still require a live owner-thread lease, even for empty
 or inactive operations. Treat diagnostics as private data; do not publish ticket material.
@@ -492,6 +498,139 @@ values remain representable.
   API does not expose. A future implementation needs its own buffer/lifetime
   protocol, not a delayed `FileReadAsyncComplete` wrapper.
 
+### Keyboard, resume and text utilities
+
+`client.utils()` is an action-free borrowed facade. `showGamepad(options)` and
+`showFloating(options)` share one wrapper pending slot. This is wrapper ownership,
+not a claim about the native service's concurrency limit. Native rejection leaves
+the slot free. `dismissGamepad`/`dismissFloating` report acceptance only; they do
+not clear the slot early or invent a cancellation event. A matching dismissal or
+Client teardown ends wrapper ownership. Teardown attempts one pending-mode dismiss;
+it makes no native utility call when unused.
+
+`.gamepad_dismissed` owns submitted/AppID/match metadata and `GamepadText` capture.
+Only a pending matching AppID triggers the secondary getters, before native
+callback release. Unrelated events are `untracked`; cancellation skips getters.
+The 1024-byte storage, including NUL, is a **wrapper bound**, not the SDK maximum.
+Reported and queried lengths, complete/empty, canceled, too-large, unavailable,
+retrieval-failed and malformed outcomes remain distinct. `capture.text()` borrows
+only the owned payload. No delayed native text getter is exposed.
+`.floating_dismissed` and `.resumed` are ordinary owned notifications.
+
+Gamepad descriptions/existing text and filter inputs require NUL-free UTF-8;
+empty text is allowed. `max_characters` is not a byte capacity. Floating geometry
+uses signed pixel coordinates and positive dimensions. Call `initFilter` explicitly
+and inspect its availability boolean. `filterText` needs nonoverlapping caller
+storage for all input bytes plus NUL. Its signed filtered-character count is not
+the returned byte length. No allocation, truncation retry or implicit initialization
+occurs. `defaultConfig` retains unknown hardware hints; it does not change settings
+or gate behavior on a hardware name.
+
+### Explicit Steam Input
+
+`client.input()` makes no native call. Check `start(options)` for `.started` before
+using Input; `.rejected` requires a new Client session. Startup uses `Init(true)`.
+Device callbacks are an explicit `device_callbacks` option, not a default Client
+behavior. After startup, call Input `runFrame()` **before** action reads, then call
+Client `runFrame()` and drain events. Client pumping does not update Input for you.
+Use only this manual-dispatch path, not ordinary/direct-action callback systems.
+
+`stop()` distinguishes `.stopped`, `.inactive` and `.rejected`. Rejected shutdown
+also requires a new session; it is not retried automatically. A missing interface
+before a lifecycle call preserves state. Final Client teardown makes at most one
+best-effort Shutdown attempt for active or failed initialization; it skips an
+unused feature and a previously rejected explicit shutdown. This is not a native
+cleanup-success guarantee. The exported `shutdown` integration hooks belong to
+Client teardown, not application-driven restart logic.
+
+Controller, action-set, digital and analog handles are distinct u64 value types,
+not resource owners. `.all` is the SDK's special controller selector. Controller,
+layer and origin reads use bounded caller storage (16/16/8); malformed counts and
+short output fail without publishing partial arrays. Digital state and activity
+are separate. Analog mode, float bits, mouse deltas and unknown outputs are kept,
+without clamping or a fabricated inactive-action error. `.input_connected` and
+`.input_disconnected` carry owned controller values.
+
+Glyph PNG/SVG paths and localized origin/action text are copied immediately.
+Null, empty and short-buffer results differ. No glyph or manifest file is opened
+by an offline test. `setManifestPath` requires an active Input session and a
+lexically fully qualified absolute path; existence/loading remains the SDK's job.
+Windows accepts drive-absolute paths and complete UNC shares, but rejects
+current-drive-rooted, drive-relative, incomplete UNC and device-namespace paths.
+The namespace restriction is wrapper policy. Input strings reject embedded NUL;
+the wrapper does **not** add a new UTF-8 acceptance rule for them. Valid future
+origins through 32767 are allowed. Vibration forwards raw u16 motors; return from
+a void native call does not prove capability, delivery, duration or a stop effect.
+
+### Cloud notifications and batch ownership
+
+`.cloud_changed` is a notification, not a captured change-list snapshot.
+`localChangeCount` preserves signed native failure separately from an empty list.
+`localChangeAt` checks current bounds and copies the path before another native
+call. Enumerate promptly on the owner thread before another pump. Null/empty/short
+paths and unknown change/path types remain distinct. An absolute local path is
+**not** automatically a cloud API filename. Nothing reads/reloads a save, resolves
+conflicts or enables dynamic sync automatically.
+
+`beginWriteBatch()` acquires a single `WriteBatch` owner only after native success.
+A native false means an existing native batch; the wrapper must not end it.
+Do not copy a live owner. Explicitly call `end()` before `Client.deinit`; close is
+refused while a wrapper batch remains acquired. End outcomes are `.ended`,
+`.no_native_batch` and `.already_closed`. Missing interface retains ownership;
+either native boolean consumes it. Stale tokens cannot end a later batch. Even a
+repeated end requires the original live owner-thread session. There is no automatic
+end, retry, rollback, flush, transaction, durability or save-commit guarantee.
+
+### Leaderboards, icons and global percentages
+
+`Stats.achievementIcon` returns a typed image handle. Zero does not identify
+whether fetching or absence caused it. `.achievement_icon` owns game ID, all 128
+name bytes, achieved-version flag and image handle; pixel/GPU ownership remains
+with the image APIs and caller.
+
+`findLeaderboard` finds only; it never creates. Check both the found flag and
+`Leaderboard` handle. Names are nonempty NUL-free UTF-8 shorter than the 128-byte
+terminated bound. `leaderboardMetadata` copies its optional name immediately and
+preserves empty names, signed counts and unknown sort/display values.
+
+`downloadLeaderboard` supports inclusive positive global ranks and bounded
+around-user offsets. `downloadLeaderboardUsers` forwards 1..100 supplied IDs,
+including duplicates and invalid IDs, without filtering them. The wrapper allows
+one outstanding download and owns at most **100 rows × 64 details** in the result.
+Only the exact pending nonzero call triggers callback-time row reads. Each bounded
+index is attempted once; after a failure, later reads serve cleanup only. The
+published rows are the valid contiguous prefix before the first failure.
+
+Inspect capture status, reported/copied counts, failure index/detail metadata and
+`all_rows_accessed`, not just request retrieval. A matching completion clears the
+pending call. Only a complete capture or understood invalid-detail capture with
+all rows accessed permits another download. Uncertain retrieval, oversized counts,
+failed reads or unknown outcomes block downloads until a new Client session.
+Restart is not proof that a particular native allocation was released. There is
+no public entry-set handle, delayed row reader, unbounded drain or invented release
+API. Dropping a Request does not release the slot: keep pumping and draining.
+Pending/blocked download state does not prevent Client close.
+
+`uploadLeaderboard` is independently serialized to one outstanding upload. It
+supports keep-best/force-update, an i32 score and 0..64 details. Check success,
+changed, score and signed new/previous ranks. Any matching completion releases
+this slot, including retrieval or operation failure. Native acceptance is not
+backend success. The SDK limit is ten uploads per ten minutes; there is no hidden
+queue, scheduler, retry, timeout or cancellation.
+
+Await successful `requestGlobalPercentages` completion before reading current
+native percentages. No readiness cache is maintained. First/next queries each
+perform one bounded step and return an owned name, raw float value and achieved
+flag only for an item. `no_data_or_end` preserves the native ambiguity; unexpected
+negative cursors stay explicit. Iterators are opaque, not array indexes or owners;
+do not retain them across refresh, pump or session. Per-name false differs from
+interface absence. No stable snapshot or unbounded enumeration is provided.
+
+Inline rows enlarge **every** Event. With Zig 0.16.0, compiler-emitted measurements
+for all four supported targets give `@sizeOf(Event) = 28,856` bytes; the private C
+`SwEvent` is 28,848 bytes. This is a storage measurement, not a performance benchmark.
+Budget stack/queue/copy storage explicitly; no callback allocation is hidden.
+
 Native string views borrow SDK storage until the next Steam call.
 Copy retained names, presence, languages, and attributes.
 Common identity and lobby metadata methods offer explicit ownership choices:
@@ -541,14 +680,16 @@ these signatures. Older callers may need these migrations:
 
 Raw `ApiCall` values remain in events and each request's `call` field.
 `Request.isPending()` distinguishes active and completed trackers.
-The added `.stats_unloaded` event also requires updating exhaustive event switches.
+Added event tags require updating exhaustive switches. The M3 `nextEvent` method
+also requires `*Client` rather than `*const Client` for ownership transitions.
 
 ## Scope and validation limits
 
 No game replication, authority, prediction, serialization, tick synchronization,
 or scene-readiness protocol is provided. The library also omits legacy P2P,
 SteamVR, inventory/purchases, server browsing/administration, custom signaling,
-Workshop, leaderboards, and input APIs.
+Workshop APIs, motion/LED/DualSense Input controls, and direct
+Input action callbacks. Further staged API work remains separate.
 
 Offline tests cover ownership, init-failure rollback, actual public lifecycle
 panic paths, message validation/release, request validation, all exposed native
@@ -564,8 +705,10 @@ planned work and acceptance gates are in [ROADMAP.md](ROADMAP.md). Historical
 macOS arm64 live evidence predates extraction and is distinct from new offline
 checks and cross-target compile/link success. Remote/multi-account
 connections, authentication validation against a peer/backend, graphical overlays,
-configured achievement/cloud writes, and other-platform runtime behavior need
-separate tests. No performance benchmark has been run.
+configured achievement/cloud writes, native leaderboard/percentage behavior,
+physical Input/keyboard/glyph/handheld behavior, and other-platform runtime behavior
+need separate tests. New offline M3 coverage is not native-service readiness.
+No performance benchmark has been run.
 
 References: [SDK API](https://partner.steamgames.com/doc/sdk/api),
 [networking sockets](https://partner.steamgames.com/doc/api/ISteamNetworkingSockets),

@@ -11,7 +11,7 @@ pub const Error = error{ ResultUnavailable, IoFailure, MalformedResult, Unexpect
 /// events, own a native resource, or provide native cancellation.
 pub fn Request(comptime kind: std.meta.Tag(Payload)) type {
     switch (kind) {
-        .lobby_created, .lobby_entered, .lobby_list, .stats_received, .cloud_written => {},
+        .lobby_created, .lobby_entered, .lobby_list, .stats_received, .cloud_written, .leaderboard_found, .leaderboard_entries, .leaderboard_uploaded, .global_percentages_ready => {},
         else => @compileError("This event does not complete an exposed API-call request"),
     }
     return struct {
@@ -34,7 +34,8 @@ pub fn Request(comptime kind: std.meta.Tag(Payload)) type {
         /// Null means no pending request matched this event. A matching event
         /// completes this tracker once, without consuming the event for others.
         /// The returned value is an owned copy. Check its operation result: a
-        /// successful retrieval does not imply successful lobby/stats/cloud work.
+        /// successful retrieval does not imply successful remote operation or
+        /// complete leaderboard-row capture.
         pub fn take(self: *Self, event: *const Event) Error!?Value {
             if (!self.isPending() or self.call != event.call) return null;
             self.call = .invalid;
@@ -111,6 +112,10 @@ test "each exposed asynchronous operation has a typed completion" {
         .{ .lobby_list, Payload{ .lobby_list = 7 } },
         .{ .stats_received, Payload{ .stats_received = .{ .game = 480, .user = @enumFromInt(2), .result = .fail } } },
         .{ .cloud_written, Payload{ .cloud_written = .access_denied } },
+        .{ .leaderboard_found, Payload{ .leaderboard_found = .{ .leaderboard = @enumFromInt(3), .found = false } } },
+        .{ .leaderboard_entries, Payload{ .leaderboard_entries = .{ .leaderboard = @enumFromInt(5), .status = .entry_failed, .reported_count = 7, .failure_index = 0 } } },
+        .{ .leaderboard_uploaded, Payload{ .leaderboard_uploaded = .{ .leaderboard = @enumFromInt(11), .success = false, .score = -13, .changed = false, .rank_new = 0, .rank_previous = 0 } } },
+        .{ .global_percentages_ready, Payload{ .global_percentages_ready = .{ .game = 17, .result = .fail } } },
     };
     inline for (cases) |case| {
         const T = Request(case[0]);

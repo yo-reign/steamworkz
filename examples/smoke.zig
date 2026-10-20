@@ -51,7 +51,7 @@ fn require(condition: bool) error{LiveCheckFailed}!void {
     if (!condition) return error.LiveCheckFailed;
 }
 
-fn drain(client: *const steam.Client) !void {
+fn drain(client: *steam.Client) !void {
     client.runFrame();
     while (client.nextEvent()) |event| {
         switch (event.payload) {

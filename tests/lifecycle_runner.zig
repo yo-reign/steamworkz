@@ -92,7 +92,7 @@ fn spawnCapture(allocator: std.mem.Allocator, io: Io, argv: []const []const u8) 
 }
 
 // CLI: check <case> <test-executable> | self-test
-// Fatal artifacts contain exactly one "lifecycle fatal <case>" test and enable
+// Fatal artifacts select one lifecycle or public-guard test and enable
 // steamworkz_test_options.fatal_lifecycle. Normal artifacts set it false.
 const cases = [_]struct { name: []const u8, diagnostic: []const u8 }{
     .{ .name = "wrong-thread", .diagnostic = "Steamworks calls must use the client owner thread" },
@@ -100,6 +100,7 @@ const cases = [_]struct { name: []const u8, diagnostic: []const u8 }{
     .{ .name = "stale-lease", .diagnostic = "Steamworks handle belongs to an earlier client session" },
     .{ .name = "released-message", .diagnostic = "Steamworks message has been released" },
     .{ .name = "outstanding-message", .diagnostic = "Release all Steamworks messages before closing the client" },
+    .{ .name = "outstanding-cloud-batch", .diagnostic = "End the Steamworks cloud write batch before closing the client" },
 };
 const output_limit = 64 * 1024;
 const deadline_ms = 10_000;

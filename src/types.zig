@@ -6,6 +6,57 @@ pub const ApiCall = enum(u64) { invalid = 0, _ };
 pub const AuthTicket = enum(u32) { invalid = 0, _ };
 /// SDK image identifier, not a GPU texture or an owned image allocation.
 pub const ImageHandle = enum(i32) { invalid = 0, _ };
+/// Session-scoped leaderboard identity, not a downloaded entry-set owner.
+pub const Leaderboard = enum(u64) { invalid = 0, _ };
+
+pub const LeaderboardEntry = struct {
+    pub const max_details = 64;
+    user: SteamId = .invalid,
+    global_rank: i32 = 0,
+    score: i32 = 0,
+    /// Attached content identifier only. This value does not own or download UGC.
+    ugc: u64 = 0,
+    detail_count: u32 = 0,
+    detail_values: [max_details]i32 = @splat(0),
+
+    /// Borrows this owned row. Native counts are checked before publication.
+    pub fn details(self: *const LeaderboardEntry) []const i32 {
+        return self.detail_values[0..@min(self.detail_count, max_details)];
+    }
+};
+
+/// Owned completion-time prefix. No SDK entry-set handle escapes the dispatcher.
+/// The fixed row bound increases Event storage but avoids callback allocations.
+pub const LeaderboardEntries = struct {
+    /// Wrapper policy, not a general SDK download limit.
+    pub const max_entries = 100;
+    pub const Status = enum(i32) {
+        complete = 0,
+        invalid_count = 1,
+        too_many_rows = 2,
+        invalid_handle = 3,
+        unavailable = 4,
+        entry_failed = 5,
+        invalid_details = 6,
+        untracked = 7,
+        _,
+    };
+    leaderboard: Leaderboard = .invalid,
+    status: Status = .untracked,
+    reported_count: i32 = 0,
+    copied_count: u32 = 0,
+    failure_index: i32 = -1,
+    reported_details: i32 = 0,
+    /// All native row reads returned true. False leaves cleanup uncertain and
+    /// blocks later downloads until a new client session. No release is invented.
+    all_rows_accessed: bool = false,
+    entry_values: [max_entries]LeaderboardEntry = @splat(.{}),
+
+    /// Borrows this value. Only the valid contiguous prefix is published.
+    pub fn entries(self: *const LeaderboardEntries) []const LeaderboardEntry {
+        return self.entry_values[0..@min(self.copied_count, max_entries)];
+    }
+};
 
 /// Unknown Steam result values remain representable after an SDK update.
 pub const Result = enum(i32) {
@@ -43,6 +94,21 @@ pub fn copyText(buffer: []u8, value: []const u8) error{BufferTooSmall}![]u8 {
 /// Check the C API's signed byte/count limit before narrowing a Zig slice length.
 pub fn count(length: usize) error{TooLarge}!c_int {
     return std.math.cast(c_int, length) orelse error.TooLarge;
+}
+
+test "leaderboard snapshots and details borrow only their owned prefixes" {
+    var snapshot: LeaderboardEntries = .{ .copied_count = 1 };
+    snapshot.entry_values[0] = .{ .user = @enumFromInt(71), .score = -17, .detail_count = 2 };
+    snapshot.entry_values[0].detail_values[0..2].* = .{ -3, 29 };
+    const copy = snapshot;
+    snapshot.entry_values[0].detail_values[0] = 99;
+    try std.testing.expectEqual(@as(usize, 1), copy.entries().len);
+    try std.testing.expectEqualSlices(i32, &.{ -3, 29 }, copy.entries()[0].details());
+    try std.testing.expectEqual(copy.entry_values[0..1].ptr, copy.entries().ptr);
+    snapshot.copied_count = std.math.maxInt(u32);
+    snapshot.entry_values[0].detail_count = std.math.maxInt(u32);
+    try std.testing.expectEqual(snapshot.entry_values.len, snapshot.entries().len);
+    try std.testing.expectEqual(snapshot.entry_values[0].detail_values.len, snapshot.entries()[0].details().len);
 }
 
 test "fixed text supports missing terminators without reading outside the slice" {

@@ -7,6 +7,14 @@ var next_generation = std.atomic.Value(u64).init(1);
 owner_thread: std.Thread.Id,
 generation: u64,
 messages: usize = 0,
+keyboard_state: enum { none, gamepad, floating } = .none,
+keyboard_app_id: u32 = 0,
+input_state: enum { inactive, active, init_failed, shutdown_failed } = .inactive,
+cloud_batch_serial: u64 = 0,
+cloud_batch_active: u64 = 0,
+leaderboard_download_call: u64 = 0,
+leaderboard_download_blocked: bool = false,
+leaderboard_upload_call: u64 = 0,
 
 /// A borrowed interface. The client must remain at its original address.
 pub const Lease = struct {
@@ -64,9 +72,10 @@ pub fn check(self: *const Context) void {
     };
 }
 
-fn validateClose(self: *const Context) error{ Closed, WrongThread, OutstandingMessages }!void {
+fn validateClose(self: *const Context) error{ Closed, WrongThread, OutstandingMessages, OutstandingCloudBatch }!void {
     try self.validateOwner();
     if (self.messages != 0) return error.OutstandingMessages;
+    if (self.cloud_batch_active != 0) return error.OutstandingCloudBatch;
 }
 
 pub fn checkCanClose(self: *const Context) void {
@@ -74,6 +83,7 @@ pub fn checkCanClose(self: *const Context) void {
         error.Closed => @panic("Steamworks client is closed or moved"),
         error.WrongThread => @panic("Steamworks calls must use the client owner thread"),
         error.OutstandingMessages => @panic("Release all Steamworks messages before closing the client"),
+        error.OutstandingCloudBatch => @panic("End the Steamworks cloud write batch before closing the client"),
     };
 }
 
@@ -111,6 +121,44 @@ test "message ownership tracks independent received messages" {
     borrowed.releaseMessage();
     try std.testing.expectEqual(@as(usize, 0), context.messages);
     try context.validateClose();
+}
+
+test "cloud write-batch ownership prevents premature session release" {
+    var context: Context = undefined;
+    try context.claim();
+    defer {
+        context.cloud_batch_active = 0;
+        context.release();
+    }
+    context.cloud_batch_active = 7;
+    try std.testing.expectError(error.OutstandingCloudBatch, context.validateClose());
+    context.cloud_batch_active = 0;
+    try context.validateClose();
+}
+
+test "a renewed session resets optional service ownership" {
+    var context: Context = undefined;
+    try context.claim();
+    context.keyboard_state = .gamepad;
+    context.keyboard_app_id = 73;
+    context.input_state = .shutdown_failed;
+    context.cloud_batch_serial = 19;
+    context.leaderboard_download_call = 31;
+    context.leaderboard_download_blocked = true;
+    context.leaderboard_upload_call = 37;
+    const generation = context.generation;
+    context.release();
+    try context.claim();
+    defer context.release();
+    try std.testing.expect(context.generation != generation);
+    try std.testing.expect(context.keyboard_state == .none);
+    try std.testing.expectEqual(@as(u32, 0), context.keyboard_app_id);
+    try std.testing.expect(context.input_state == .inactive);
+    try std.testing.expectEqual(@as(u64, 0), context.cloud_batch_serial);
+    try std.testing.expectEqual(@as(u64, 0), context.cloud_batch_active);
+    try std.testing.expectEqual(@as(u64, 0), context.leaderboard_download_call);
+    try std.testing.expect(!context.leaderboard_download_blocked);
+    try std.testing.expectEqual(@as(u64, 0), context.leaderboard_upload_call);
 }
 
 test "copied contexts and foreign threads cannot use the active session" {

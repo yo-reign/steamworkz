@@ -267,6 +267,215 @@ pub const Stats = struct {
     lease: Context.Lease,
     pub const Achievement = struct { unlocked: bool, unlocked_at: u32 };
     pub const Attribute = enum { name, description, hidden };
+    pub const Leaderboard = types.Leaderboard;
+    pub const LeaderboardEntry = types.LeaderboardEntry;
+    pub const LeaderboardEntries = types.LeaderboardEntries;
+    pub const Sort = enum(i32) { none = 0, ascending = 1, descending = 2, _ };
+    pub const Display = enum(i32) { none = 0, numeric = 1, time_seconds = 2, time_milliseconds = 3, _ };
+    /// Name borrows caller storage only. Null and empty names are distinct.
+    pub const LeaderboardMetadata = struct { name: ?[]const u8, entry_count: i32, sort: Sort, display: Display };
+    pub const DownloadWindow = union(enum) {
+        global: struct { first_rank: u32, last_rank: u32 },
+        around_user: struct { before: u32, after: u32 },
+    };
+    pub const UploadOptions = struct {
+        method: enum { keep_best, force_update } = .keep_best,
+        score: i32,
+        details: []const i32 = &.{},
+    };
+    /// Opaque native cursor, not a row index or resource owner. Never retain
+    /// across a percentage refresh, event pump or session change.
+    pub const PercentageIterator = enum(i32) { invalid = -1, _ };
+    pub const GlobalPercentage = struct {
+        iterator: PercentageIterator,
+        name_length: u32,
+        name_bytes: [128]u8,
+        percent: f32,
+        achieved: bool,
+        pub fn nameBytes(self: *const GlobalPercentage) []const u8 {
+            return self.name_bytes[0..self.name_length];
+        }
+    };
+    pub const PercentageStep = union(enum) {
+        item: GlobalPercentage,
+        /// Native -1 cannot distinguish unavailable data from end of iteration.
+        no_data_or_end,
+        unexpected_iterator: i32,
+    };
+
+    fn boundedName(key: [:0]const u8) !void {
+        try name(key);
+        if (key.len >= 128) return error.TooLarge;
+    }
+    fn leaderboardName(key: [:0]const u8) !void {
+        try boundedName(key);
+        if (!std.unicode.utf8ValidateSlice(key)) return error.InvalidUtf8;
+    }
+    fn validLeaderboard(board: Leaderboard) !void {
+        if (board == .invalid) return error.InvalidLeaderboard;
+    }
+    fn available(result: u8) !void {
+        if (result == 0) return error.InterfaceUnavailable;
+    }
+    fn windowRange(window: DownloadWindow) !struct { around: u8, first: i32, last: i32 } {
+        return switch (window) {
+            .global => |range| blk: {
+                if (range.first_rank == 0 or range.last_rank < range.first_rank or range.last_rank > std.math.maxInt(i32)) return error.InvalidRange;
+                if (range.last_rank - range.first_rank >= 100) return error.TooLarge;
+                break :blk .{ .around = 0, .first = @intCast(range.first_rank), .last = @intCast(range.last_rank) };
+            },
+            .around_user => |range| blk: {
+                if (range.before >= 100 or range.after >= 100 or range.before + range.after >= 100) return error.TooLarge;
+                break :blk .{ .around = 1, .first = -@as(i32, @intCast(range.before)), .last = @intCast(range.after) };
+            },
+        };
+    }
+    fn downloadReady(self: Stats) !void {
+        if (self.lease.context.leaderboard_download_blocked) return error.DownloadBlocked;
+        if (self.lease.context.leaderboard_download_call != 0) return error.DownloadPending;
+    }
+    fn trackDownload(self: Stats, call: u64) !Request(.leaderboard_entries) {
+        const request = try Request(.leaderboard_entries).init(@enumFromInt(call));
+        self.lease.context.leaderboard_download_call = call;
+        return request;
+    }
+
+    /// Zero is preserved; it does not distinguish fetching from no image.
+    pub fn achievementIcon(self: Stats, key: [:0]const u8) !types.ImageHandle {
+        return self.achievementIconWith(c, key);
+    }
+    fn achievementIconWith(self: Stats, comptime native: type, key: [:0]const u8) !types.ImageHandle {
+        self.lease.check();
+        try boundedName(key);
+        var image: i32 = 0;
+        try available(native.sw_stats_achievement_icon(key.ptr, &image));
+        return @enumFromInt(image);
+    }
+    /// Finds only; never creates a backend leaderboard.
+    pub fn findLeaderboard(self: Stats, key: [:0]const u8) !Request(.leaderboard_found) {
+        return self.findLeaderboardWith(c, key);
+    }
+    fn findLeaderboardWith(self: Stats, comptime native: type, key: [:0]const u8) !Request(.leaderboard_found) {
+        self.lease.check();
+        try leaderboardName(key);
+        var call: u64 = 0;
+        try available(native.sw_stats_find_leaderboard(key.ptr, &call));
+        return Request(.leaderboard_found).init(@enumFromInt(call));
+    }
+    /// Immediately copies the full SDK name without NUL or truncation.
+    pub fn leaderboardMetadata(self: Stats, board: Leaderboard, buffer: []u8) !LeaderboardMetadata {
+        return self.leaderboardMetadataWith(c, board, buffer);
+    }
+    fn leaderboardMetadataWith(self: Stats, comptime native: type, board: Leaderboard, buffer: []u8) !LeaderboardMetadata {
+        self.lease.check();
+        try validLeaderboard(board);
+        var out: c.sw_stats_leaderboard_metadata = undefined;
+        const status = native.sw_stats_leaderboard_metadata_copy(@intFromEnum(board), buffer.ptr, buffer.len, &out);
+        switch (status) {
+            c.SW_STATS_TEXT_OK, c.SW_STATS_TEXT_NULL => {},
+            c.SW_STATS_TEXT_UNAVAILABLE => return error.InterfaceUnavailable,
+            c.SW_STATS_TEXT_SHORT => return error.BufferTooSmall,
+            else => return error.InvalidNativeResult,
+        }
+        if (out.name_length > buffer.len) return error.InvalidNativeResult;
+        return .{ .name = if (status == c.SW_STATS_TEXT_NULL) null else buffer[0..out.name_length], .entry_count = out.entry_count, .sort = @enumFromInt(out.sort), .display = @enumFromInt(out.display) };
+    }
+    /// Must pump/drain completion even if Request is discarded: it does not
+    /// cancel or clear the session slot. Uncertain native cleanup blocks further
+    /// downloads until a new session; restarting is not a native release claim.
+    pub fn downloadLeaderboard(self: Stats, board: Leaderboard, window: DownloadWindow) !Request(.leaderboard_entries) {
+        return self.downloadLeaderboardWith(c, board, window);
+    }
+    fn downloadLeaderboardWith(self: Stats, comptime native: type, board: Leaderboard, window: DownloadWindow) !Request(.leaderboard_entries) {
+        self.lease.check();
+        try self.downloadReady();
+        try validLeaderboard(board);
+        const range = try windowRange(window);
+        var call: u64 = 0;
+        try available(native.sw_stats_download(@intFromEnum(board), range.around, range.first, range.last, &call));
+        return self.trackDownload(call);
+    }
+    /// 1..100 exact IDs, including duplicates/invalid IDs for SDK validation.
+    /// Shares downloadLeaderboard's mandatory draining and uncertainty policy.
+    pub fn downloadLeaderboardUsers(self: Stats, board: Leaderboard, users: []const SteamId) !Request(.leaderboard_entries) {
+        return self.downloadLeaderboardUsersWith(c, board, users);
+    }
+    fn downloadLeaderboardUsersWith(self: Stats, comptime native: type, board: Leaderboard, users: []const SteamId) !Request(.leaderboard_entries) {
+        self.lease.check();
+        try self.downloadReady();
+        try validLeaderboard(board);
+        if (users.len == 0 or users.len > 100) return error.InvalidUserCount;
+        var ids: [100]u64 = undefined;
+        for (users, 0..) |user, i| ids[i] = @intFromEnum(user);
+        var call: u64 = 0;
+        try available(native.sw_stats_download_users(@intFromEnum(board), &ids, @intCast(users.len), &call));
+        return self.trackDownload(call);
+    }
+    /// Explicit persistent action. Native limit: ten uploads per ten minutes,
+    /// one outstanding upload. No scheduler/retry. Drain matching completion
+    /// even when discarding Request; acceptance is not operation success.
+    pub fn uploadLeaderboard(self: Stats, board: Leaderboard, options: UploadOptions) !Request(.leaderboard_uploaded) {
+        return self.uploadLeaderboardWith(c, board, options);
+    }
+    fn uploadLeaderboardWith(self: Stats, comptime native: type, board: Leaderboard, options: UploadOptions) !Request(.leaderboard_uploaded) {
+        self.lease.check();
+        if (self.lease.context.leaderboard_upload_call != 0) return error.UploadPending;
+        try validLeaderboard(board);
+        if (options.details.len > 64) return error.TooLarge;
+        var call: u64 = 0;
+        try available(native.sw_stats_upload(@intFromEnum(board), @intFromBool(options.method == .force_update), options.score, options.details.ptr, @intCast(options.details.len), &call));
+        const request = try Request(.leaderboard_uploaded).init(@enumFromInt(call));
+        self.lease.context.leaderboard_upload_call = call;
+        return request;
+    }
+    pub fn requestGlobalPercentages(self: Stats) !Request(.global_percentages_ready) {
+        return self.requestGlobalPercentagesWith(c);
+    }
+    fn requestGlobalPercentagesWith(self: Stats, comptime native: type) !Request(.global_percentages_ready) {
+        self.lease.check();
+        var call: u64 = 0;
+        try available(native.sw_stats_request_global_percentages(&call));
+        return Request(.global_percentages_ready).init(@enumFromInt(call));
+    }
+    /// Wait for a successful request before reading. No readiness cache or
+    /// stable snapshot is promised. Each read performs exactly one native step.
+    pub fn firstGlobalPercentage(self: Stats) !PercentageStep {
+        return self.percentageStepWith(c, null);
+    }
+    pub fn nextGlobalPercentage(self: Stats, previous: PercentageIterator) !PercentageStep {
+        return self.percentageStepWith(c, previous);
+    }
+    fn percentageStepWith(self: Stats, comptime native: type, previous: ?PercentageIterator) !PercentageStep {
+        self.lease.check();
+        if (previous) |cursor| if (@intFromEnum(cursor) < 0) return error.InvalidIterator;
+        var out: c.sw_stats_percentage = undefined;
+        switch (native.sw_stats_percentage_step(@intFromBool(previous == null), if (previous) |cursor| @intFromEnum(cursor) else 0, &out)) {
+            c.SW_STATS_PERCENTAGE_ITEM => {},
+            c.SW_STATS_PERCENTAGE_UNAVAILABLE => return error.InterfaceUnavailable,
+            c.SW_STATS_PERCENTAGE_END => return .no_data_or_end,
+            c.SW_STATS_PERCENTAGE_NEGATIVE => return .{ .unexpected_iterator = out.iterator },
+            c.SW_STATS_PERCENTAGE_UNTERMINATED => return error.UnterminatedName,
+            else => return error.InvalidNativeResult,
+        }
+        if (out.name_length >= 128 or out.iterator < 0) return error.InvalidNativeResult;
+        return .{ .item = .{ .iterator = @enumFromInt(out.iterator), .name_length = out.name_length, .name_bytes = out.name, .percent = @bitCast(out.percent_bits), .achieved = out.achieved != 0 } };
+    }
+    /// Null means native false, not missing interface. Wait for successful
+    /// global percentages request first. Float bits are not clamped.
+    pub fn globalPercentage(self: Stats, key: [:0]const u8) !?f32 {
+        return self.globalPercentageWith(c, key);
+    }
+    fn globalPercentageWith(self: Stats, comptime native: type, key: [:0]const u8) !?f32 {
+        self.lease.check();
+        try boundedName(key);
+        var bits: u32 = 0;
+        return switch (native.sw_stats_achievement_percentage(key.ptr, &bits)) {
+            -1 => error.InterfaceUnavailable,
+            0 => null,
+            1 => @as(f32, @bitCast(bits)),
+            else => error.InvalidNativeResult,
+        };
+    }
     pub fn getInt(self: Stats, key: [:0]const u8) !i32 {
         try name(key);
         self.lease.check();
@@ -381,6 +590,96 @@ pub const Cloud = struct {
     lease: Context.Lease,
     pub const Quota = struct { total: u64, available: u64 };
     pub const File = struct { name: []const u8, size: usize };
+    pub const LocalChangeType = enum(i32) { invalid = 0, file_updated = 1, file_deleted = 2, _ };
+    pub const FilePathType = enum(i32) { invalid = 0, absolute = 1, api_filename = 2, _ };
+    /// Path borrows only the caller's output storage, never SDK memory.
+    pub const LocalChange = struct { path: []const u8, change: LocalChangeType, path_type: FilePathType };
+    pub const LocalChangeError = error{ InterfaceUnavailable, NativeCountFailed, InvalidIndex, NullPath, BufferTooSmall, InvalidNativeResult };
+
+    /// Live query, not a callback-time snapshot. Enumerate promptly on the owner
+    /// thread before another pump; separate calls do not form a stable snapshot.
+    pub fn localChangeCount(self: Cloud) LocalChangeError!usize {
+        return self.localChangeCountWith(c);
+    }
+    fn localChangeCountWith(self: Cloud, comptime native: type) LocalChangeError!usize {
+        self.lease.check();
+        var value: i32 = 0;
+        if (native.sw_cloud_local_change_count(&value) == 0) return error.InterfaceUnavailable;
+        if (value < 0) return error.NativeCountFailed;
+        return @intCast(value);
+    }
+    /// Copies immediately, without NUL or truncation. Empty paths succeed; null
+    /// paths fail. Short storage is unchanged. Bounds are checked against the
+    /// current count, not an earlier notification or localChangeCount call.
+    /// Absolute paths are NOT filenames for read/write/delete. This does not read
+    /// files, reload saves, resolve conflicts or enable dynamic sync.
+    pub fn localChangeAt(self: Cloud, index: usize, buffer: []u8) LocalChangeError!LocalChange {
+        return self.localChangeAtWith(c, index, buffer);
+    }
+    fn localChangeAtWith(self: Cloud, comptime native: type, index: usize, buffer: []u8) LocalChangeError!LocalChange {
+        self.lease.check();
+        const i = std.math.cast(i32, index) orelse return error.InvalidIndex;
+        var output: c.sw_cloud_local_change = undefined;
+        switch (native.sw_cloud_local_change_copy(i, buffer.ptr, buffer.len, &output)) {
+            c.SW_CLOUD_CHANGE_OK => {},
+            c.SW_CLOUD_CHANGE_UNAVAILABLE => return error.InterfaceUnavailable,
+            c.SW_CLOUD_CHANGE_COUNT_FAILED => return error.NativeCountFailed,
+            c.SW_CLOUD_CHANGE_INVALID_INDEX => return error.InvalidIndex,
+            c.SW_CLOUD_CHANGE_NULL_PATH => return error.NullPath,
+            c.SW_CLOUD_CHANGE_SHORT_BUFFER => return error.BufferTooSmall,
+            else => return error.InvalidNativeResult,
+        }
+        if (output.path_length > buffer.len) return error.InvalidNativeResult;
+        return .{ .path = buffer[0..output.path_length], .change = @enumFromInt(output.change), .path_type = @enumFromInt(output.path_type) };
+    }
+
+    pub const BeginWriteBatchError = error{ BatchAlreadyActive, TokenExhausted, InterfaceUnavailable, NativeBatchAlreadyActive };
+    /// Acquires a hint only: no transaction, flush, durability or rollback claim.
+    /// Caller must explicitly end the acquired owner before Client.deinit.
+    pub fn beginWriteBatch(self: Cloud) BeginWriteBatchError!WriteBatch {
+        return self.beginWriteBatchWith(c);
+    }
+    fn beginWriteBatchWith(self: Cloud, comptime native: type) BeginWriteBatchError!WriteBatch {
+        self.lease.check();
+        const context = self.lease.context;
+        if (context.cloud_batch_active != 0) return error.BatchAlreadyActive;
+        if (context.cloud_batch_serial == std.math.maxInt(u64)) return error.TokenExhausted;
+        context.cloud_batch_serial += 1;
+        switch (native.sw_cloud_begin_write_batch()) {
+            -1 => return error.InterfaceUnavailable,
+            0 => return error.NativeBatchAlreadyActive,
+            else => {},
+        }
+        context.cloud_batch_active = context.cloud_batch_serial;
+        return .{ .lease = self.lease, .token = context.cloud_batch_active };
+    }
+
+    /// Single logical owner: do not copy a live value. A move must abandon the
+    /// source. Tokens prevent stale copies ending later batches; they cannot
+    /// make two copies independent owners. No automatic teardown or retry.
+    pub const WriteBatch = struct {
+        lease: Context.Lease,
+        token: u64,
+        pub const EndOutcome = enum { ended, no_native_batch, already_closed };
+        pub const EndError = error{ InterfaceUnavailable, StaleBatch };
+        /// Native true/false both consume the owner, neither means save success.
+        /// Unavailable interface retains it for an explicit later attempt.
+        /// Even repeated end requires the original live owner-thread session.
+        pub fn end(self: *WriteBatch) EndError!EndOutcome {
+            return self.endWith(c);
+        }
+        fn endWith(self: *WriteBatch, comptime native: type) EndError!EndOutcome {
+            self.lease.check();
+            if (self.token == 0) return .already_closed;
+            const context = self.lease.context;
+            if (context.cloud_batch_active != self.token) return error.StaleBatch;
+            const result = native.sw_cloud_end_write_batch();
+            if (result == -1) return error.InterfaceUnavailable;
+            context.cloud_batch_active = 0;
+            self.token = 0;
+            return if (result == 0) .no_native_batch else .ended;
+        }
+    };
     pub fn enabledForAccount(self: Cloud) bool {
         self.lease.check();
         return c.sw_cloud_account_enabled() != 0;
@@ -527,4 +826,379 @@ test "analyze all public service methods" {
     std.testing.refAllDecls(Apps);
     std.testing.refAllDecls(Stats);
     std.testing.refAllDecls(Cloud);
+}
+
+test "Cloud local changes preserve signed failure, bounds, copied paths and future enums" {
+    const Native = struct {
+        var value: i32 = 0;
+        var available: bool = true;
+        var status: u8 = c.SW_CLOUD_CHANGE_OK;
+        var copies: usize = 0;
+        fn sw_cloud_local_change_count(out: *i32) u8 {
+            out.* = value;
+            return @intFromBool(available);
+        }
+        fn sw_cloud_local_change_copy(index: i32, buffer: [*]u8, capacity: usize, out: *c.sw_cloud_local_change) u8 {
+            std.debug.assert(index == 0);
+            copies += 1;
+            if (status != c.SW_CLOUD_CHANGE_OK) return status;
+            out.* = .{ .path_length = 3, .change = 123456, .path_type = -7654 };
+            if (capacity < 3) return c.SW_CLOUD_CHANGE_SHORT_BUFFER;
+            @memcpy(buffer[0..3], "abc");
+            return c.SW_CLOUD_CHANGE_OK;
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    const cloud: Cloud = .{ .lease = context.lease() };
+    try std.testing.expectEqual(@as(usize, 0), try cloud.localChangeCountWith(Native));
+    Native.value = -7;
+    try std.testing.expectError(error.NativeCountFailed, cloud.localChangeCountWith(Native));
+    Native.value = 3;
+    try std.testing.expectEqual(@as(usize, 3), try cloud.localChangeCountWith(Native));
+    Native.available = false;
+    try std.testing.expectError(error.InterfaceUnavailable, cloud.localChangeCountWith(Native));
+    var buffer: [4]u8 = @splat(0xa5);
+    try std.testing.expectError(error.InvalidIndex, cloud.localChangeAtWith(Native, @as(usize, std.math.maxInt(i32)) + 1, &buffer));
+    try std.testing.expectEqual(@as(usize, 0), Native.copies);
+    const result = try cloud.localChangeAtWith(Native, 0, &buffer);
+    try std.testing.expectEqualStrings("abc", result.path);
+    try std.testing.expectEqual(buffer[0..].ptr, result.path.ptr);
+    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(result.change));
+    try std.testing.expectEqual(@as(i32, -7654), @intFromEnum(result.path_type));
+    try std.testing.expectEqual(@as(u8, 0xa5), buffer[3]);
+    try std.testing.expectError(error.BufferTooSmall, cloud.localChangeAtWith(Native, 0, buffer[0..2]));
+    const cases = .{
+        .{ c.SW_CLOUD_CHANGE_UNAVAILABLE, error.InterfaceUnavailable },
+        .{ c.SW_CLOUD_CHANGE_COUNT_FAILED, error.NativeCountFailed },
+        .{ c.SW_CLOUD_CHANGE_INVALID_INDEX, error.InvalidIndex },
+        .{ c.SW_CLOUD_CHANGE_NULL_PATH, error.NullPath },
+    };
+    inline for (cases) |case| {
+        Native.status = case[0];
+        try std.testing.expectError(case[1], cloud.localChangeAtWith(Native, 0, &buffer));
+    }
+}
+
+test "Cloud WriteBatch owns only acquired hints and protects later batches" {
+    const Native = struct {
+        var begin_result: i32 = 0;
+        var end_result: i32 = 1;
+        var begins: usize = 0;
+        var ends: usize = 0;
+        fn sw_cloud_begin_write_batch() i32 {
+            begins += 1;
+            return begin_result;
+        }
+        fn sw_cloud_end_write_batch() i32 {
+            ends += 1;
+            return end_result;
+        }
+        fn cleanup(owner: *Cloud.WriteBatch) void {
+            end_result = 1;
+            _ = owner.endWith(@This()) catch unreachable;
+        }
+        fn expectBeginError(cloud: Cloud, expected: Cloud.BeginWriteBatchError) !void {
+            if (cloud.beginWriteBatchWith(@This())) |acquired| {
+                var owner = acquired;
+                defer cleanup(&owner);
+                return error.TestUnexpectedResult;
+            } else |err| try std.testing.expectEqual(expected, err);
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    const cloud: Cloud = .{ .lease = context.lease() };
+    try Native.expectBeginError(cloud, error.NativeBatchAlreadyActive);
+    try std.testing.expectEqual(@as(usize, 0), Native.ends);
+    try std.testing.expectEqual(@as(u64, 0), context.cloud_batch_active);
+    Native.begin_result = -1;
+    try Native.expectBeginError(cloud, error.InterfaceUnavailable);
+    try std.testing.expectEqual(@as(u64, 0), context.cloud_batch_active);
+    Native.begin_result = 1;
+    var first = try cloud.beginWriteBatchWith(Native);
+    defer Native.cleanup(&first);
+    var stale = first;
+    const begins = Native.begins;
+    try Native.expectBeginError(cloud, error.BatchAlreadyActive);
+    try std.testing.expectEqual(begins, Native.begins);
+    Native.end_result = -1;
+    try std.testing.expectError(error.InterfaceUnavailable, first.endWith(Native));
+    try std.testing.expectEqual(first.token, context.cloud_batch_active);
+    Native.end_result = 0;
+    try std.testing.expectEqual(.no_native_batch, try first.endWith(Native));
+    const ends = Native.ends;
+    try std.testing.expectEqual(.already_closed, try first.endWith(Native));
+    try std.testing.expectEqual(ends, Native.ends);
+    var second = try cloud.beginWriteBatchWith(Native);
+    defer Native.cleanup(&second);
+    try std.testing.expectError(error.StaleBatch, stale.endWith(Native));
+    try std.testing.expectEqual(ends, Native.ends);
+    try std.testing.expectEqual(second.token, context.cloud_batch_active);
+    Native.end_result = 1;
+    try std.testing.expectEqual(.ended, try second.endWith(Native));
+    context.cloud_batch_serial = std.math.maxInt(u64);
+    const before_exhaustion = Native.begins;
+    try Native.expectBeginError(cloud, error.TokenExhausted);
+    try std.testing.expectEqual(before_exhaustion, Native.begins);
+    try std.testing.expectEqual(@as(u64, 0), context.cloud_batch_active);
+}
+
+test "Stats progression bounds, forwarding and independent session request slots" {
+    const Native = struct {
+        fn require(condition: bool) void {
+            std.testing.expect(condition) catch @panic("progression argument forwarding mismatch");
+        }
+        var calls: usize = 0;
+        var availability: u8 = 1;
+        var call_id: u64 = 0;
+        var image: i32 = 0;
+        var around: u8 = 0;
+        var first: i32 = 1;
+        var last: i32 = 100;
+        var users: []const SteamId = &.{};
+        var upload: Stats.UploadOptions = .{ .score = 0 };
+        fn call(out: *u64) u8 {
+            calls += 1;
+            out.* = call_id;
+            return availability;
+        }
+        fn sw_stats_achievement_icon(key: [*:0]const u8, out: *i32) u8 {
+            require(std.mem.eql(u8, std.mem.span(key), "name"));
+            calls += 1;
+            out.* = image;
+            return availability;
+        }
+        fn sw_stats_find_leaderboard(key: [*:0]const u8, out: *u64) u8 {
+            require(std.mem.eql(u8, std.mem.span(key), "name"));
+            return call(out);
+        }
+        fn sw_stats_request_global_percentages(out: *u64) u8 {
+            return call(out);
+        }
+        fn sw_stats_download(board: u64, a: u8, f: i32, l: i32, out: *u64) u8 {
+            require(board == 0xf123456789abcdef and a == around and f == first and l == last);
+            return call(out);
+        }
+        fn sw_stats_download_users(board: u64, ids: [*]const u64, n: i32, out: *u64) u8 {
+            require(board == 0xf123456789abcdef and n == users.len);
+            for (users, 0..) |id, i| require(ids[i] == @intFromEnum(id));
+            return call(out);
+        }
+        fn sw_stats_upload(board: u64, force: u8, score: i32, details: [*]const i32, n: i32, out: *u64) u8 {
+            require(board == 0xf123456789abcdef and (force != 0) == (upload.method == .force_update) and score == upload.score and n == upload.details.len);
+            require(std.mem.eql(i32, details[0..@intCast(n)], upload.details));
+            return call(out);
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    const stats: Stats = .{ .lease = context.lease() };
+    const board: Stats.Leaderboard = @enumFromInt(0xf123456789abcdef);
+    const window: Stats.DownloadWindow = .{ .global = .{ .first_rank = 1, .last_rank = 100 } };
+    try std.testing.expectEqual(types.ImageHandle.invalid, try stats.achievementIconWith(Native, "name"));
+    Native.image = -123;
+    try std.testing.expectEqual(@as(i32, -123), @intFromEnum(try stats.achievementIconWith(Native, "name")));
+    const before_invalid = Native.calls;
+    try std.testing.expectError(error.EmptyName, stats.findLeaderboardWith(Native, ""));
+    try std.testing.expectError(error.InteriorNul, stats.findLeaderboardWith(Native, "n\x00ame"));
+    try std.testing.expectError(error.InvalidUtf8, stats.findLeaderboardWith(Native, "\xff"));
+    try std.testing.expectError(error.TooLarge, stats.findLeaderboardWith(Native, "n" ** 128));
+    try Stats.leaderboardName("n" ** 127);
+    try Stats.leaderboardName("日本語");
+    try std.testing.expectError(error.TooLarge, stats.achievementIconWith(Native, "n" ** 128));
+    try std.testing.expectError(error.InteriorNul, stats.achievementIconWith(Native, "n\x00"));
+    try std.testing.expectError(error.InvalidLeaderboard, stats.downloadLeaderboardWith(Native, .invalid, window));
+    const invalid_windows = [_]Stats.DownloadWindow{
+        .{ .global = .{ .first_rank = 0, .last_rank = 1 } },
+        .{ .global = .{ .first_rank = 2, .last_rank = 1 } },
+        .{ .global = .{ .first_rank = 1, .last_rank = std.math.maxInt(u32) } },
+    };
+    for (invalid_windows) |invalid| try std.testing.expectError(error.InvalidRange, stats.downloadLeaderboardWith(Native, board, invalid));
+    try std.testing.expectError(error.TooLarge, stats.downloadLeaderboardWith(Native, board, .{ .global = .{ .first_rank = 1, .last_rank = 101 } }));
+    for ([_]u32{ 100, std.math.maxInt(u32) }) |n| {
+        try std.testing.expectError(error.TooLarge, stats.downloadLeaderboardWith(Native, board, .{ .around_user = .{ .before = n, .after = 0 } }));
+        try std.testing.expectError(error.TooLarge, stats.downloadLeaderboardWith(Native, board, .{ .around_user = .{ .before = 0, .after = n } }));
+    }
+    try std.testing.expectError(error.TooLarge, stats.downloadLeaderboardWith(Native, board, .{ .around_user = .{ .before = 50, .after = 50 } }));
+    try std.testing.expectError(error.InvalidUserCount, stats.downloadLeaderboardUsersWith(Native, board, &.{}));
+    const too_many_users = [_]SteamId{.invalid} ** 101;
+    try std.testing.expectError(error.InvalidUserCount, stats.downloadLeaderboardUsersWith(Native, board, &too_many_users));
+    const too_many_details = [_]i32{0} ** 65;
+    try std.testing.expectError(error.TooLarge, stats.uploadLeaderboardWith(Native, board, .{ .score = 0, .details = &too_many_details }));
+    try std.testing.expectEqual(before_invalid, Native.calls);
+    const users = [_]SteamId{ .invalid, @enumFromInt(0xfedcba9876543210), @enumFromInt(0xfedcba9876543210) };
+    Native.users = &users;
+    for ([_]u8{ 0, 1 }) |availability| {
+        Native.availability = availability;
+        const err = if (availability == 0) error.InterfaceUnavailable else error.RequestRejected;
+        try std.testing.expectError(err, stats.findLeaderboardWith(Native, "name"));
+        try std.testing.expectError(err, stats.requestGlobalPercentagesWith(Native));
+        try std.testing.expectError(err, stats.downloadLeaderboardWith(Native, board, window));
+        try std.testing.expectError(err, stats.downloadLeaderboardUsersWith(Native, board, &users));
+        try std.testing.expectError(err, stats.uploadLeaderboardWith(Native, board, .{ .score = 0 }));
+        try std.testing.expectEqual(@as(u64, 0), context.leaderboard_download_call);
+        try std.testing.expectEqual(@as(u64, 0), context.leaderboard_upload_call);
+    }
+    Native.availability = 0;
+    try std.testing.expectError(error.InterfaceUnavailable, stats.achievementIconWith(Native, "name"));
+    Native.availability = 1;
+    Native.call_id = 0xe123456789abcdef;
+    try std.testing.expectEqual(Native.call_id, @intFromEnum((try stats.findLeaderboardWith(Native, "name")).call));
+    try std.testing.expectEqual(Native.call_id, @intFromEnum((try stats.requestGlobalPercentagesWith(Native)).call));
+    _ = try stats.downloadLeaderboardWith(Native, board, window);
+    try std.testing.expectEqual(Native.call_id, context.leaderboard_download_call);
+    const pending_calls = Native.calls;
+    try std.testing.expectError(error.DownloadPending, stats.downloadLeaderboardWith(Native, .invalid, window));
+    try std.testing.expectError(error.DownloadPending, stats.downloadLeaderboardUsersWith(Native, board, &.{}));
+    try std.testing.expectEqual(pending_calls, Native.calls);
+    Native.call_id = 42;
+    _ = try stats.uploadLeaderboardWith(Native, board, .{ .score = 0 });
+    try std.testing.expectEqual(@as(u64, 42), context.leaderboard_upload_call);
+    try std.testing.expectEqual(@as(u64, 0xe123456789abcdef), context.leaderboard_download_call);
+    const upload_calls = Native.calls;
+    try std.testing.expectError(error.UploadPending, stats.uploadLeaderboardWith(Native, .invalid, .{ .score = 0 }));
+    try std.testing.expectEqual(upload_calls, Native.calls);
+    // Simulated parent completion bookkeeping, not an integration test.
+    context.leaderboard_download_call = 0;
+    _ = try stats.downloadLeaderboardUsersWith(Native, board, &users);
+    try std.testing.expectEqual(@as(u64, 42), context.leaderboard_download_call);
+    context.leaderboard_download_call = 0;
+    context.leaderboard_download_blocked = true;
+    const blocked_calls = Native.calls;
+    try std.testing.expectError(error.DownloadBlocked, stats.downloadLeaderboardUsersWith(Native, board, &users));
+    try std.testing.expectError(error.DownloadBlocked, stats.downloadLeaderboardWith(Native, board, window));
+    try std.testing.expectEqual(blocked_calls, Native.calls);
+    context.leaderboard_upload_call = 0;
+    _ = try stats.uploadLeaderboardWith(Native, board, .{ .score = 0 });
+    context.leaderboard_download_blocked = false;
+    context.leaderboard_upload_call = 0;
+    const details = [_]i32{std.math.minInt(i32)} ** 64;
+    Native.upload = .{ .score = std.math.minInt(i32), .method = .force_update, .details = &details };
+    _ = try stats.uploadLeaderboardWith(Native, board, Native.upload);
+    Native.around = 1;
+    for (0..100) |before| {
+        context.leaderboard_download_call = 0;
+        Native.first = -@as(i32, @intCast(before));
+        Native.last = @intCast(99 - before);
+        _ = try stats.downloadLeaderboardWith(Native, board, .{ .around_user = .{ .before = @intCast(before), .after = @intCast(99 - before) } });
+    }
+    context.leaderboard_download_call = 0;
+    Native.first = 0;
+    Native.last = 0;
+    _ = try stats.downloadLeaderboardWith(Native, board, .{ .around_user = .{ .before = 0, .after = 0 } });
+    context.leaderboard_download_call = 0;
+    Native.around = 0;
+    Native.first = std.math.maxInt(i32);
+    Native.last = Native.first;
+    _ = try stats.downloadLeaderboardWith(Native, board, .{ .global = .{ .first_rank = std.math.maxInt(i32), .last_rank = std.math.maxInt(i32) } });
+    const full_users = [_]SteamId{.invalid} ** 100;
+    for ([_][]const SteamId{ users[0..1], &full_users }) |ids| {
+        context.leaderboard_download_call = 0;
+        Native.users = ids;
+        _ = try stats.downloadLeaderboardUsersWith(Native, board, ids);
+    }
+}
+
+test "Stats progression metadata and global percentage owned outcomes preserve unknown values and float bits" {
+    const Native = struct {
+        fn require(condition: bool) void {
+            std.testing.expect(condition) catch @panic("progression argument forwarding mismatch");
+        }
+        var status: u8 = c.SW_STATS_TEXT_OK;
+        var step_status: u8 = c.SW_STATS_PERCENTAGE_ITEM;
+        var getter_status: i32 = 1;
+        var length: u32 = 3;
+        var iterator: i32 = 123456789;
+        var percent_bits: u32 = 0x7fc12345;
+        var achieved: u8 = 1;
+        var calls: usize = 0;
+        var previous: ?Stats.PercentageIterator = null;
+        fn sw_stats_leaderboard_metadata_copy(board: u64, buffer: [*]u8, capacity: usize, out: *c.sw_stats_leaderboard_metadata) u8 {
+            require(board == 42);
+            calls += 1;
+            out.* = .{ .name_length = length, .entry_count = -77, .sort = -123456, .display = 123456 };
+            if (length <= capacity) @memset(buffer[0..length], 'a');
+            return status;
+        }
+        fn sw_stats_percentage_step(first: u8, prev: i32, out: *c.sw_stats_percentage) u8 {
+            require((first != 0) == (previous == null));
+            if (previous) |cursor| require(prev == @intFromEnum(cursor));
+            calls += 1;
+            out.* = .{ .iterator = iterator, .name_length = length, .percent_bits = percent_bits, .achieved = achieved, .name = @splat('a') };
+            return step_status;
+        }
+        fn sw_stats_achievement_percentage(key: [*:0]const u8, bits: *u32) i32 {
+            require(std.mem.eql(u8, std.mem.span(key), "name"));
+            calls += 1;
+            bits.* = percent_bits;
+            return getter_status;
+        }
+    };
+    var context: Context = undefined;
+    try context.claim();
+    defer context.release();
+    const stats: Stats = .{ .lease = context.lease() };
+    var buffer: [3]u8 = undefined;
+    const metadata = try stats.leaderboardMetadataWith(Native, @enumFromInt(42), &buffer);
+    try std.testing.expectEqualStrings("aaa", metadata.name.?);
+    try std.testing.expectEqual(buffer[0..].ptr, metadata.name.?.ptr);
+    try std.testing.expectEqual(@as(i32, -77), metadata.entry_count);
+    try std.testing.expectEqual(@as(i32, -123456), @intFromEnum(metadata.sort));
+    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(metadata.display));
+    Native.length = 0;
+    try std.testing.expectEqualStrings("", (try stats.leaderboardMetadataWith(Native, @enumFromInt(42), &.{})).name.?);
+    Native.status = c.SW_STATS_TEXT_NULL;
+    try std.testing.expect((try stats.leaderboardMetadataWith(Native, @enumFromInt(42), &.{})).name == null);
+    inline for (.{ .{ c.SW_STATS_TEXT_UNAVAILABLE, error.InterfaceUnavailable }, .{ c.SW_STATS_TEXT_SHORT, error.BufferTooSmall }, .{ 255, error.InvalidNativeResult } }) |case| {
+        Native.status = case[0];
+        try std.testing.expectError(case[1], stats.leaderboardMetadataWith(Native, @enumFromInt(42), &buffer));
+    }
+    Native.status = c.SW_STATS_TEXT_OK;
+    Native.length = 4;
+    try std.testing.expectError(error.InvalidNativeResult, stats.leaderboardMetadataWith(Native, @enumFromInt(42), &buffer));
+    const before_invalid = Native.calls;
+    try std.testing.expectError(error.InvalidLeaderboard, stats.leaderboardMetadataWith(Native, .invalid, &buffer));
+    try std.testing.expectError(error.InvalidIterator, stats.percentageStepWith(Native, .invalid));
+    try std.testing.expectError(error.InvalidIterator, stats.percentageStepWith(Native, @enumFromInt(std.math.minInt(i32))));
+    try std.testing.expectError(error.InteriorNul, stats.globalPercentageWith(Native, "n\x00ame"));
+    try std.testing.expectError(error.TooLarge, stats.globalPercentageWith(Native, "n" ** 128));
+    try std.testing.expectEqual(before_invalid, Native.calls);
+    for ([_]u32{ 0, 0x80000000, 0x7fc12345, 0x7f800000, 0xff800000, 0xc1234567 }) |bits| {
+        Native.percent_bits = bits;
+        try std.testing.expectEqual(bits, @as(u32, @bitCast((try stats.globalPercentageWith(Native, "name")).?)));
+        for ([_]u32{ 0, 127 }) |length| {
+            Native.length = length;
+            Native.previous = null;
+            const item = (try stats.percentageStepWith(Native, null)).item;
+            try std.testing.expectEqual(bits, @as(u32, @bitCast(item.percent)));
+            try std.testing.expectEqual(@as(usize, length), item.nameBytes().len);
+            try std.testing.expect(item.achieved);
+            Native.previous = item.iterator;
+            Native.achieved = 0;
+            const next = (try stats.percentageStepWith(Native, item.iterator)).item;
+            try std.testing.expect(!next.achieved);
+            Native.achieved = 1;
+        }
+    }
+    Native.previous = null;
+    Native.length = 128;
+    try std.testing.expectError(error.InvalidNativeResult, stats.percentageStepWith(Native, null));
+    Native.length = 0;
+    Native.iterator = -2;
+    Native.step_status = c.SW_STATS_PERCENTAGE_NEGATIVE;
+    try std.testing.expectEqual(@as(i32, -2), (try stats.percentageStepWith(Native, null)).unexpected_iterator);
+    Native.step_status = c.SW_STATS_PERCENTAGE_END;
+    try std.testing.expectEqual(.no_data_or_end, try stats.percentageStepWith(Native, null));
+    inline for (.{ .{ c.SW_STATS_PERCENTAGE_UNAVAILABLE, error.InterfaceUnavailable }, .{ c.SW_STATS_PERCENTAGE_UNTERMINATED, error.UnterminatedName }, .{ 255, error.InvalidNativeResult } }) |case| {
+        Native.step_status = case[0];
+        try std.testing.expectError(case[1], stats.percentageStepWith(Native, null));
+    }
+    Native.getter_status = 0;
+    try std.testing.expect(try stats.globalPercentageWith(Native, "name") == null);
+    Native.getter_status = -1;
+    try std.testing.expectError(error.InterfaceUnavailable, stats.globalPercentageWith(Native, "name"));
 }

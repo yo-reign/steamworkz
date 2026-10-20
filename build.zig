@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const sources: []const []const u8 = &.{ "c/core.cpp", "c/networking.cpp", "c/networking_config.cpp", "c/networking_debug.cpp", "c/lobbies.cpp", "c/services.cpp" };
+const sources: []const []const u8 = &.{ "c/core.cpp", "c/networking.cpp", "c/networking_config.cpp", "c/networking_debug.cpp", "c/lobbies.cpp", "c/services.cpp", "c/utils.cpp", "c/input.cpp" };
 const cpp_flags: []const []const u8 = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-Wall", "-Wextra", "-Werror" };
 
 pub fn build(b: *std.Build) void {
@@ -68,6 +68,7 @@ pub fn build(b: *std.Build) void {
         lifecycle.dependOn(&check.step);
     }
     test_step.dependOn(addNetworkingGuards(b, target, optimize, runner, compile_tests));
+    test_step.dependOn(addPlatformGuards(b, target, optimize, runner, compile_tests));
     const control = b.addTest(.{ .name = "lifecycle-control", .root_module = module, .filters = &.{"lifecycle control "}, .use_llvm = use_llvm, .use_lld = use_llvm });
     const control_run = b.addRunArtifact(control);
     configureRun(b, control_run, target.result, sdk_path);
@@ -93,6 +94,19 @@ pub fn build(b: *std.Build) void {
     compile_tests.dependOn(&networking_tests.step);
     // These tests already run in the ordinary unfiltered suite.
 
+    const platform_tests = b.addTest(.{
+        .name = "platform-tools",
+        .root_module = module,
+        .filters = &.{ "platform ", "Utils ", "Input ", "Stats progression", "Cloud ", "leaderboard ", "progression event " },
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
+    });
+    const platform_run = b.addRunArtifact(platform_tests);
+    configureRun(b, platform_run, target.result, sdk_path);
+    b.step("test-platform-tools", "Run offline platform, cloud, Input and progression Zig tests").dependOn(&platform_run.step);
+    compile_tests.dependOn(&platform_tests.step);
+    // The normal suite already executes these tests.
+
     const fixtures = [_]struct { name: []const u8, source: []const u8, define: []const u8, sdk_link: bool = true }{
         .{ .name = "core", .source = "c/core.cpp", .define = "SW_CORE_TEST" },
         .{ .name = "networking", .source = "c/networking.cpp", .define = "SW_NETWORKING_TEST" },
@@ -100,6 +114,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "networking-debug", .source = "c/networking_debug.cpp", .define = "SW_NETWORKING_DEBUG_TEST", .sdk_link = false },
         .{ .name = "lobbies", .source = "c/lobbies.cpp", .define = "SW_LOBBIES_TEST" },
         .{ .name = "services", .source = "c/services.cpp", .define = "SW_SERVICES_TEST", .sdk_link = false },
+        .{ .name = "utils", .source = "c/utils.cpp", .define = "SW_UTILS_TEST", .sdk_link = false },
+        .{ .name = "input", .source = "c/input.cpp", .define = "SW_INPUT_TEST", .sdk_link = false },
     };
     for (fixtures) |fixture| {
         const fixture_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
@@ -110,6 +126,11 @@ pub fn build(b: *std.Build) void {
             configureModule(b, fixture_module, sdk_path, runtime);
         fixture_module.addCMacro(fixture.define, "1");
         fixture_module.addCSourceFile(.{ .file = b.path(fixture.source), .flags = cpp_flags });
+        if (std.mem.eql(u8, fixture.name, "core")) {
+            // The core fixture already links Steam for uncalled production paths.
+            // Its executed poll source substitutes secondary keyboard/row reads.
+            fixture_module.addCSourceFiles(.{ .files = &.{ "c/utils.cpp", "c/services.cpp" }, .flags = cpp_flags });
+        }
         const executable = b.addExecutable(.{
             .name = b.fmt("steamworkz-{s}-fixtures", .{fixture.name}),
             .root_module = fixture_module,
@@ -181,6 +202,68 @@ fn addNetworkingGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize
             step.dependOn(&check.step);
         }
     }
+    return step;
+}
+
+fn addPlatformGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
+    const use_llvm: ?bool = if (target.result.os.tag == .linux) true else null;
+    const module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    module.addIncludePath(b.path("c"));
+    module.addCSourceFile(.{ .file = b.path("tests/platform_guards.cpp"), .flags = cpp_flags });
+    const options = b.addOptions();
+    options.addOption(bool, "fatal_lifecycle", true);
+    module.addOptions("steamworkz_test_options", options);
+    const executable = b.addTest(.{
+        .name = "platform-guards",
+        .root_module = module,
+        .filters = &.{"platform fatal guard"},
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
+    });
+    compile_tests.dependOn(&executable.step);
+    const step = b.step("test-platform-guards", "Check M3 leases before invalid, empty, state and native paths without Steam linkage");
+    const methods = [_][]const u8{
+        "gamepad",                "gamepad_invalid",         "gamepad_pending",        "floating",         "floating_invalid",
+        "dismiss_gamepad",        "dismiss_floating",        "filter_init",            "filter_invalid",   "filter_native",
+        "hardware",               "utils_shutdown",          "input_start",            "input_stop",       "input_frame",
+        "manifest_invalid",       "manifest_native",         "controllers",            "action_set",       "digital_action",
+        "analog_action",          "activate_set",            "activate_layer",         "deactivate_layer", "deactivate_all",
+        "current_set",            "layers",                  "digital_data",           "analog_data",      "digital_origins",
+        "analog_origins",         "input_type",              "translate_invalid",      "translate_native", "png_invalid",
+        "png_native",             "svg",                     "origin_name",            "digital_name",     "analog_name",
+        "vibrate",                "vibrate_extended",        "input_shutdown",         "change_count",     "change_invalid",
+        "change_native",          "batch_begin",             "batch_pending",          "batch_exhausted",  "batch_end_consumed",
+        "batch_end_stale",        "batch_end_native",        "icon_invalid",           "icon_native",      "find_invalid",
+        "find_native",            "metadata_invalid",        "metadata_native",        "download_invalid", "download_native",
+        "download_pending",       "download_blocked",        "users_empty",            "users_native",     "upload_invalid",
+        "upload_native",          "upload_pending",          "percentage_request",     "percentage_first", "percentage_next_invalid",
+        "percentage_next_native", "percentage_name_invalid", "percentage_name_native", "client_utils",     "client_input",
+        "client_poll",            "client_deinit",
+    };
+    for (methods) |method| {
+        for ([_]struct { lease: []const u8, diagnostic: []const u8 }{
+            .{ .lease = "closed", .diagnostic = "moved-client" },
+            .{ .lease = "stale", .diagnostic = "stale-lease" },
+            .{ .lease = "foreign", .diagnostic = "wrong-thread" },
+        }) |case| {
+            // Client owns the current Context, not a captured generation lease.
+            if (std.mem.eql(u8, case.lease, "stale") and std.mem.startsWith(u8, method, "client_")) continue;
+            const check = b.addRunArtifact(runner);
+            check.step.name = b.fmt("platform guard {s}/{s}", .{ case.lease, method });
+            check.addArgs(&.{ "check", case.diagnostic });
+            check.addArtifactArg(executable);
+            check.setEnvironmentVariable("STEAMWORKZ_GUARD_LEASE", case.lease);
+            check.setEnvironmentVariable("STEAMWORKZ_GUARD_METHOD", method);
+            step.dependOn(&check.step);
+        }
+    }
+    const close_check = b.addRunArtifact(runner);
+    close_check.step.name = "platform guard outstanding cloud batch";
+    close_check.addArgs(&.{ "check", "outstanding-cloud-batch" });
+    close_check.addArtifactArg(executable);
+    close_check.setEnvironmentVariable("STEAMWORKZ_GUARD_LEASE", "owner");
+    close_check.setEnvironmentVariable("STEAMWORKZ_GUARD_METHOD", "client_close_batch");
+    step.dependOn(&close_check.step);
     return step;
 }
 

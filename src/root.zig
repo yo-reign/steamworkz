@@ -13,6 +13,8 @@ comptime {
     _ = networking_debug;
 }
 pub const Lobbies = @import("Lobbies.zig");
+pub const Utils = @import("Utils.zig");
+pub const Input = @import("Input.zig");
 pub const Friends = @import("services.zig").Friends;
 pub const Apps = @import("services.zig").Apps;
 pub const Stats = @import("services.zig").Stats;
@@ -27,6 +29,9 @@ pub const AppId = @import("types.zig").AppId;
 pub const ApiCall = @import("types.zig").ApiCall;
 pub const AuthTicket = @import("types.zig").AuthTicket;
 pub const ImageHandle = @import("types.zig").ImageHandle;
+pub const Leaderboard = @import("types.zig").Leaderboard;
+pub const LeaderboardEntry = @import("types.zig").LeaderboardEntry;
+pub const LeaderboardEntries = @import("types.zig").LeaderboardEntries;
 pub const Result = @import("types.zig").Result;
 
 test {
@@ -40,4 +45,6 @@ test {
     _ = NetworkingConfig;
     _ = networking_debug;
     _ = Lobbies;
+    _ = Utils;
+    _ = Input;
 }
