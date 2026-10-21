@@ -15,9 +15,10 @@ repository; do not copy or symlink it into the checkout. Pass the extracted
 its parent directory.
 
 ```sh
+git clone https://github.com/yo-reign/steamworkz.git
 cd steamworkz
 zig build test -Dsdk=/absolute/path/to/sdk
-zig build -Dsdk=/absolute/path/to/sdk
+zig build install -Dsdk=/absolute/path/to/sdk
 ```
 
 Alternatively, set `STEAMWORKS_SDK` to that external directory. Explicit `-Dsdk`
@@ -131,6 +132,10 @@ const steamworkz = b.dependency("steamworkz", .{
     .sdk = sdk,
 });
 exe.root_module.addImport("steamworkz", steamworkz.module("steamworkz"));
+if (target.result.os.tag == .linux) {
+    // Keep SDK lookup at link time; preserve the explicit $ORIGIN runtime path.
+    exe.each_lib_rpath = false;
+}
 
 const steamworkz_build = @import("steamworkz");
 steamworkz_build.installRuntime(b, target.result, sdk);
@@ -141,6 +146,15 @@ steamworkz_build.configureRun(b, run_cmd, target.result, sdk);
 This excerpt assumes your build already defines `target`, `optimize`, `exe`, and
 `run_cmd`. Game source needs only `@import("steamworkz")`; no SDK headers,
 `@cImport`, C++ adapter, or separate bridge build recipe belongs in game code.
+Build and install your consuming game with:
+
+```sh
+zig build install -Dsdk=/absolute/path/to/sdk
+```
+
+The same SDK environment fallback and missing-configuration error apply.
+These commands compile/install only. Application code explicitly initializes
+Steam with `Client.init`; see [Client and event loop](#client-and-event-loop).
 
 Put a runtime beside **each executable that loads it**:
 `libsteam_api.dylib` on macOS, `libsteam_api.so` on Linux, or `steam_api64.dll` on
@@ -149,6 +163,39 @@ Windows. Linux executables get an `$ORIGIN` search path. The macOS library uses
 adjacent library. Cached build-run/test processes use a process-local library
 search path. SDK redistribution and app deployment remain subject to Valve's
 terms; SDK headers are not included in this package's source distribution.
+
+### Linux deployment search paths
+
+`$ORIGIN` means the directory containing the executable. Steamworkz supplies this
+explicit runtime search path so the installed game can find its adjacent
+`libsteam_api.so` after the game folder is moved. The SDK is needed to build the
+game, not as a directory installed on players' machines.
+
+Zig 0.16 can also automatically add link-time library directories to RUNPATH,
+including the developer's SDK directory. The `each_lib_rpath = false` setting
+above disables those automatic entries while retaining explicit paths such as
+`$ORIGIN`. Without it, a missing adjacent runtime can be masked by the SDK copy.
+
+Apply this setting to every Linux executable or test artifact that links
+Steamworkz, not just the main executable. It belongs to the consuming
+`std.Build.Step.Compile`: importing a module or passing a dependency option cannot
+set it for the final executable. It affects all dynamic libraries in that
+artifact; provide explicit RPATHs for any other nonstandard deployment directories.
+`configureRun` still supplies process-local lookup for cached run/test binaries;
+it does not replace this installed-executable setting.
+
+Inspect your installed Linux game with `readelf -d` (replace `my-game` below):
+
+```sh
+readelf -d zig-out/bin/my-game
+```
+
+Check that `NEEDED` names `libsteam_api.so`, RUNPATH includes `$ORIGIN`, and the SDK
+directory is absent. Ship the supplied runtime beside the game; do not substitute
+a globally installed copy. Copy the install folder elsewhere and verify library
+resolution with `LD_LIBRARY_PATH` and `LD_PRELOAD` unset. A loader-only inspection
+checks deployment without initializing Steam; actual game execution is a separate
+live check.
 
 ## Client and event loop
 
