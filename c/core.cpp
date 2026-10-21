@@ -22,25 +22,53 @@ template<class T> int32_t enum_value(const T &value) {
 }
 }
 
-int32_t sw_init(char message[SW_INIT_MESSAGE_SIZE]) {
+namespace {
+struct NativeInit {
+    static constexpr auto init = SteamAPI_InitEx;
+    static constexpr auto user = SteamAPI_SteamUser;
+    static constexpr auto friends = SteamAPI_SteamFriends;
+    static constexpr auto utils = SteamAPI_SteamUtils;
+    static constexpr auto apps = SteamAPI_SteamApps;
+    static constexpr auto matchmaking = SteamAPI_SteamMatchmaking;
+    static constexpr auto stats = SteamAPI_SteamUserStats;
+    static constexpr auto storage = SteamAPI_SteamRemoteStorage;
+    static constexpr auto sockets = SteamAPI_SteamNetworkingSockets_SteamAPI;
+    static constexpr auto networking_utils = SteamAPI_SteamNetworkingUtils_SteamAPI;
+    // GNU Windows dllimport addresses are not constant-expression initializers.
+    static auto pipe() -> decltype(SteamAPI_GetHSteamPipe()) { return SteamAPI_GetHSteamPipe(); }
+    static void shutdown() { SteamAPI_Shutdown(); }
+    static void dispatch() { SteamAPI_ManualDispatch_Init(); }
+};
+// Keep admission, diagnostic copying and rollback on the same path in fixtures.
+template<class Api> int32_t initialize(char message[SW_INIT_MESSAGE_SIZE]) {
     SteamErrMsg native_message = {};
-    const auto native_result = SteamAPI_InitEx(&native_message);
+    const auto native_result = Api::init(&native_message);
     const int32_t result = enum_value(native_result);
     memcpy(message, native_message, sizeof(native_message));
     message[SW_INIT_MESSAGE_SIZE - 1] = 0;
     if (result != k_ESteamAPIInitResult_OK) return int32_t(result);
-    if (!SteamAPI_SteamUser() || !SteamAPI_SteamFriends() || !SteamAPI_SteamUtils() ||
-        !SteamAPI_SteamApps() || !SteamAPI_SteamMatchmaking() || !SteamAPI_SteamUserStats() ||
-        !SteamAPI_SteamRemoteStorage() || !SteamAPI_SteamNetworkingSockets_SteamAPI() ||
-        !SteamAPI_SteamNetworkingUtils_SteamAPI() || SteamAPI_GetHSteamPipe() == 0) {
-        SteamAPI_Shutdown();
+    if (!Api::user() || !Api::friends() || !Api::utils() ||
+        !Api::apps() || !Api::matchmaking() || !Api::stats() ||
+        !Api::storage() || !Api::sockets() ||
+        !Api::networking_utils() || Api::pipe() == 0) {
+        Api::shutdown();
         const char unavailable[] = "Steam initialized, but a required interface is unavailable.";
         memcpy(message, unavailable, sizeof(unavailable));
         return 4;
     }
-    SteamAPI_ManualDispatch_Init();
+    Api::dispatch();
     return 0;
 }
+template<decltype(&SteamAPI_ISteamUser_GetAuthSessionTicket) get_ticket>
+uint32_t auth_ticket(ISteamUser *user, void *buffer, int32_t capacity, uint32_t *size, uint64_t recipient) {
+    SteamNetworkingIdentity identity;
+    identity.Clear();
+    identity.SetSteamID64(recipient);
+    return get_ticket(user, buffer, capacity, size, recipient ? &identity : nullptr);
+}
+} // namespace
+
+int32_t sw_init(char message[SW_INIT_MESSAGE_SIZE]) { return initialize<NativeInit>(message); }
 void sw_shutdown(void) { SteamAPI_Shutdown(); }
 uint8_t sw_restart_if_necessary(uint32_t app) { return SteamAPI_RestartAppIfNecessary(app); }
 int32_t sw_pipe(void) { return SteamAPI_GetHSteamPipe(); }
@@ -51,11 +79,7 @@ uint32_t sw_app_id(void) { return SteamAPI_ISteamUtils_GetAppID(SteamAPI_SteamUt
 uint8_t sw_overlay_enabled(void) { return SteamAPI_ISteamUtils_IsOverlayEnabled(SteamAPI_SteamUtils()); }
 uint32_t sw_server_time(void) { return SteamAPI_ISteamUtils_GetServerRealTime(SteamAPI_SteamUtils()); }
 uint32_t sw_auth_ticket(void *buffer, int32_t capacity, uint32_t *size, uint64_t recipient) {
-    SteamNetworkingIdentity identity;
-    identity.Clear();
-    identity.SetSteamID64(recipient);
-    return SteamAPI_ISteamUser_GetAuthSessionTicket(SteamAPI_SteamUser(), buffer, capacity, size,
-        recipient ? &identity : nullptr);
+    return auth_ticket<SteamAPI_ISteamUser_GetAuthSessionTicket>(SteamAPI_SteamUser(), buffer, capacity, size, recipient);
 }
 uint32_t sw_web_ticket(const char *identity) {
     return SteamAPI_ISteamUser_GetAuthTicketForWebApi(SteamAPI_SteamUser(), identity);
@@ -985,10 +1009,119 @@ void test_text_and_ticket_bounds() {
             });
     }
 }
+// Opaque interface tokens are never dereferenced. Signatures come from the SDK;
+// every call reachable through initialize<FakeInit> is substituted.
+struct FakeInit {
+    inline static ESteamAPIInitResult result = k_ESteamAPIInitResult_OK;
+    inline static SteamErrMsg diagnostic = {};
+    inline static int missing = -1;
+    inline static int inits = 0, shutdowns = 0, dispatches = 0;
+    inline static unsigned checked = 0;
+    inline static char interface_token = 0;
+    static ESteamAPIInitResult init(SteamErrMsg *message) {
+        expect(++inits == 1 && checked == 0 && shutdowns == 0 && dispatches == 0);
+        for (char byte : *message) expect(byte == 0);
+        memcpy(*message, diagnostic, sizeof(diagnostic));
+        return result;
+    }
+    static bool available(int slot) {
+        expect(inits == 1 && result == k_ESteamAPIInitResult_OK && shutdowns == 0 && dispatches == 0);
+        expect((checked & (1U << slot)) == 0);
+        checked |= 1U << slot;
+        return missing != slot;
+    }
+    template<class T> static T interface(int slot) {
+        return available(slot) ? reinterpret_cast<T>(&interface_token) : nullptr;
+    }
+    static auto user() -> decltype(NativeInit::user()) { return interface<decltype(user())>(0); }
+    static auto friends() -> decltype(NativeInit::friends()) { return interface<decltype(friends())>(1); }
+    static auto utils() -> decltype(NativeInit::utils()) { return interface<decltype(utils())>(2); }
+    static auto apps() -> decltype(NativeInit::apps()) { return interface<decltype(apps())>(3); }
+    static auto matchmaking() -> decltype(NativeInit::matchmaking()) { return interface<decltype(matchmaking())>(4); }
+    static auto stats() -> decltype(NativeInit::stats()) { return interface<decltype(stats())>(5); }
+    static auto storage() -> decltype(NativeInit::storage()) { return interface<decltype(storage())>(6); }
+    static auto sockets() -> decltype(NativeInit::sockets()) { return interface<decltype(sockets())>(7); }
+    static auto networking_utils() -> decltype(NativeInit::networking_utils()) { return interface<decltype(networking_utils())>(8); }
+    static auto pipe() -> decltype(NativeInit::pipe()) { return available(9) ? test_pipe : 0; }
+    static void shutdown() {
+        expect(inits == 1 && result == k_ESteamAPIInitResult_OK && missing >= 0);
+        expect(++shutdowns == 1 && dispatches == 0);
+    }
+    static void dispatch() {
+        expect(inits == 1 && result == k_ESteamAPIInitResult_OK && missing == -1);
+        expect(checked == (1U << 10) - 1 && shutdowns == 0 && ++dispatches == 1);
+    }
+};
+void test_initialization() {
+    test_type = "initialization"; test_case = "diagnostics/admission/rollback/dispatch";
+    const ESteamAPIInitResult results[] = {k_ESteamAPIInitResult_OK, k_ESteamAPIInitResult_FailedGeneric,
+        k_ESteamAPIInitResult_NoSteamClient, k_ESteamAPIInitResult_VersionMismatch};
+    for (auto result : results) for (int missing = -1; missing < 10; ++missing) for (int pattern = 0; pattern < 4; ++pattern) {
+        test_index = missing; test_variant = pattern;
+        FakeInit::result = result; FakeInit::missing = missing;
+        FakeInit::inits = FakeInit::shutdowns = FakeInit::dispatches = 0; FakeInit::checked = 0;
+        text_pattern(FakeInit::diagnostic, pattern);
+        struct { unsigned char before = 0x73; SteamErrMsg message; unsigned char after = 0x91; } out;
+        memset(out.message, 0xa5, sizeof(out.message));
+        const int32_t actual = initialize<FakeInit>(out.message);
+        const bool partial = result == k_ESteamAPIInitResult_OK && missing >= 0;
+        expect(actual == (partial ? 4 : int32_t(result)) && FakeInit::inits == 1);
+        expect(out.before == 0x73 && out.after == 0x91 && out.message[sizeof(out.message) - 1] == 0);
+        expect(FakeInit::shutdowns == int(partial));
+        expect(FakeInit::dispatches == int(result == k_ESteamAPIInitResult_OK && !partial));
+        if (result != k_ESteamAPIInitResult_OK) expect(FakeInit::checked == 0);
+        if (partial) {
+            expect((FakeInit::checked & (1U << missing)) != 0);
+            expect(strcmp(out.message, "Steam initialized, but a required interface is unavailable.") == 0);
+        } else {
+            expect(memcmp(out.message, FakeInit::diagnostic, sizeof(out.message) - 1) == 0);
+            // The returned diagnostic must not alias the source's later state.
+            const char first = out.message[0];
+            FakeInit::diagnostic[0] ^= 1;
+            expect(out.message[0] == first);
+        }
+    }
+}
+struct FakeTicket {
+    inline static ISteamUser *user = nullptr;
+    inline static void *buffer = nullptr;
+    inline static uint32 *size = nullptr;
+    inline static uint64 recipient = 0;
+    inline static HAuthTicket handle = k_HAuthTicketInvalid;
+    inline static uint32 length = 0;
+    inline static int calls = 0;
+    static HAuthTicket get(ISteamUser *user, void *out, int capacity, uint32 *written, const SteamNetworkingIdentity *identity) {
+        expect(user == FakeTicket::user && out == buffer && capacity == 8 && written == size && ++calls == 1);
+        expect((identity != nullptr) == (recipient != 0));
+        if (identity) {
+            expect(identity->m_eType == k_ESteamNetworkingIdentityType_SteamID);
+            expect(identity->GetSteamID64() == recipient);
+        }
+        *written = length;
+        return handle;
+    }
+};
+void test_auth_ticket_forwarding() {
+    test_type = "auth ticket"; test_case = "optional recipient and native outputs";
+    const uint64 recipients[] = {0, test_user};
+    const HAuthTicket handles[] = {k_HAuthTicketInvalid, 73};
+    for (uint64 recipient : recipients) for (HAuthTicket handle : handles) {
+        unsigned char buffer[8] = {};
+        uint32 size = 0;
+        FakeTicket::user = reinterpret_cast<ISteamUser *>(&FakeInit::interface_token);
+        FakeTicket::buffer = buffer; FakeTicket::size = &size; FakeTicket::recipient = recipient;
+        FakeTicket::handle = handle; FakeTicket::length = UINT32_MAX; FakeTicket::calls = 0;
+        expect(auth_ticket<FakeTicket::get>(FakeTicket::user, buffer, sizeof(buffer), &size, recipient) == handle);
+        expect(size == UINT32_MAX && FakeTicket::calls == 1);
+    }
+}
+
 #undef broadcast
 #undef expect
 } // namespace
 int main() {
+    test_initialization();
+    test_auth_ticket_forwarding();
     test_completions();
     test_platform_completions();
     test_keyboard_capture();
@@ -996,6 +1129,6 @@ int main() {
     test_broadcasts();
     test_capability_callbacks();
     test_text_and_ticket_bounds();
-    printf("Steamworks callback fixtures passed (%d bounded poll cases)\n", cases_run);
+    printf("Steamworks init/ticket fixtures and callbacks passed (%d bounded poll cases)\n", cases_run);
 }
 #endif

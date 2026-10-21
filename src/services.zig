@@ -1,3 +1,7 @@
+//! Borrowed Client facades for friends/presence, app queries, stats and cloud.
+//! Each facade uses the owner's live thread/session; obtaining one does no work.
+//! Valve interfaces are ISteamFriends, ISteamApps, ISteamUserStats and
+//! ISteamRemoteStorage respectively; reference links live on each facade.
 const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
@@ -40,7 +44,10 @@ fn imageByteCount(width: u32, height: u32) error{TooLarge}!usize {
     return std.math.mul(usize, pixels, 4) catch error.TooLarge;
 }
 
-/// Returned strings are borrowed until the next Steam call. Copy retained text.
+/// ISteamFriends queries and explicit social/overlay actions; image access uses
+/// ISteamUtils. Returned SDK strings expire at the next Steam call, pump or close.
+/// Use the Copy/Alloc variants for retained names and presence.
+/// Valve: https://partner.steamgames.com/doc/api/ISteamFriends
 pub const Friends = struct {
     lease: Context.Lease,
     pub const PersonaState = enum(i32) { offline = 0, online = 1, busy = 2, away = 3, snooze = 4, looking_to_trade = 5, looking_to_play = 6, invisible = 7, _ };
@@ -58,6 +65,9 @@ pub const Friends = struct {
         }
     };
 
+    /// ISteamFriends::GetPersonaName: local user's UTF-8 display name, not an ID.
+    /// Borrows SDK storage until the next Steam call/pump/close. Use personaNameCopy
+    /// for caller storage or personaNameAlloc for an allocator-owned copy.
     pub fn personaName(self: Friends) []const u8 {
         self.lease.check();
         return borrowed(c.sw_persona_name());
@@ -70,11 +80,15 @@ pub const Friends = struct {
     pub fn personaNameAlloc(self: Friends, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         return allocator.dupe(u8, self.personaName());
     }
-    /// Counts accepted friends, not invitations or blocked users.
+    /// ISteamFriends::GetFriendCount with k_EFriendFlagImmediate: accepted friends,
+    /// not invitations or blocked users.
     pub fn friendCount(self: Friends) !usize {
         self.lease.check();
         return count(c.sw_friend_count());
     }
+    /// ISteamFriends::GetFriendByIndex with k_EFriendFlagImmediate. Use zero-based
+    /// indices below friendCount; the list may change between calls. InvalidIndex
+    /// means the SDK returned an invalid ID, not a stable enumeration snapshot.
     pub fn friendAt(self: Friends, index: usize) !SteamId {
         const i = try types.count(index);
         self.lease.check();
@@ -82,6 +96,9 @@ pub const Friends = struct {
         if (user == 0) return error.InvalidIndex;
         return @enumFromInt(user);
     }
+    /// ISteamFriends::GetFriendPersonaName: cached UTF-8 name; not proof of friendship.
+    /// Names may arrive asynchronously (requestUser / persona_changed). Borrows SDK
+    /// storage until the next Steam call/pump/close; retain via friendNameCopy/Alloc.
     pub fn friendName(self: Friends, user: SteamId) []const u8 {
         self.lease.check();
         return borrowed(c.sw_friend_name(@intFromEnum(user)));
@@ -94,16 +111,21 @@ pub const Friends = struct {
     pub fn friendNameAlloc(self: Friends, allocator: std.mem.Allocator, user: SteamId) std.mem.Allocator.Error![]u8 {
         return allocator.dupe(u8, self.friendName(user));
     }
+    /// ISteamFriends::GetFriendPersonaState: cached state, preserving unknown values.
+    /// Offline can also mean Steam has no state information for this user.
     pub fn state(self: Friends, user: SteamId) PersonaState {
         self.lease.check();
         return @enumFromInt(c.sw_friend_state(@intFromEnum(user)));
     }
-    /// True means a request started. False can mean the data was already cached.
+    /// ISteamFriends::RequestUserInformation. True starts a fetch; wait for
+    /// PersonaStateChange_t (persona_changed) for this user. False can mean cached
+    /// data. name_only avoids an avatar download; no typed Request is returned.
     pub fn requestUser(self: Friends, user: SteamId, options: UserInfoOptions) bool {
         self.lease.check();
         return c.sw_request_user(@intFromEnum(user), @intFromBool(options.name_only)) != 0;
     }
-    /// A null value removes one key. Steam limits keys to 63 and values to 255 bytes.
+    /// ISteamFriends::SetRichPresence publishes local presence. A null value removes
+    /// one key. Steam limits keys to 63 and values to 255 bytes (excluding NUL).
     pub fn setPresence(self: Friends, key: [:0]const u8, value: ?[:0]const u8) !void {
         try name(key);
         if (key.len >= 64) return error.TooLarge;
@@ -114,10 +136,14 @@ pub const Friends = struct {
         self.lease.check();
         try accepted(c.sw_set_presence(key.ptr, if (value) |v| v.ptr else null));
     }
+    /// ISteamFriends::ClearRichPresence removes all local rich-presence keys.
     pub fn clearPresence(self: Friends) void {
         self.lease.check();
         c.sw_clear_presence();
     }
+    /// ISteamFriends::GetFriendRichPresence: cached text; empty is not a fetch status.
+    /// Borrows SDK storage until the next Steam call/pump/close. Use presenceCopy/Alloc
+    /// to retain it, or requestPresence to refresh the user's cache.
     pub fn presence(self: Friends, user: SteamId, key: [:0]const u8) ![]const u8 {
         try name(key);
         self.lease.check();
@@ -131,16 +157,22 @@ pub const Friends = struct {
     pub fn presenceAlloc(self: Friends, allocator: std.mem.Allocator, user: SteamId, key: [:0]const u8) ![]u8 {
         return allocator.dupe(u8, try self.presence(user, key));
     }
+    /// ISteamFriends::RequestFriendRichPresence; observe FriendRichPresenceUpdate_t
+    /// (presence_changed) for this user. Void submission, not completion.
     pub fn requestPresence(self: Friends, user: SteamId) void {
         self.lease.check();
         c.sw_request_presence(@intFromEnum(user));
     }
-    /// Sends an invitation. Never call this automatically for arbitrary friends.
+    /// ISteamFriends::InviteUserToGame sends connect text, not a connection.
+    /// Native acceptance does not mean the invitee joined. Use only explicit intent.
     pub fn invite(self: Friends, user: SteamId, connect: [:0]const u8) !void {
         try string(connect);
         self.lease.check();
         try accepted(c.sw_invite_game(@intFromEnum(user), connect.ptr));
     }
+    /// ISteamFriends::ActivateGameOverlay after ISteamUtils::IsOverlayEnabled.
+    /// Explicit UI action; OverlayUnavailable means the precheck failed, while
+    /// success only means the void activation was invoked.
     pub fn openOverlay(self: Friends, dialog: Overlay) !void {
         self.lease.check();
         if (c.sw_overlay_enabled() == 0) return error.OverlayUnavailable;
@@ -162,18 +194,25 @@ pub const Friends = struct {
         if (c.sw_overlay_enabled() == 0) return error.OverlayUnavailable;
         c.sw_open_store(@intFromEnum(app));
     }
+    /// ISteamFriends::ActivateGameOverlayInviteDialog opens lobby-invite UI;
+    /// it does not itself invite anyone. Fails with OverlayUnavailable if disabled.
     pub fn openInvite(self: Friends, lobby: SteamId) !void {
         if (lobby == .invalid) return error.InvalidLobby;
         self.lease.check();
         if (c.sw_overlay_enabled() == 0) return error.OverlayUnavailable;
         c.sw_open_invite(@intFromEnum(lobby));
     }
+    /// ISteamFriends::GetSmallFriendAvatar / GetMediumFriendAvatar / GetLargeFriendAvatar.
+    /// No image allocation is owned here. For pending large avatars, wait for
+    /// AvatarImageLoaded_t (avatar_loaded), then query again. Read image handles via
+    /// imageSize/readImage; do not assume fixed dimensions.
     pub fn avatar(self: Friends, user: SteamId, size: AvatarSize) Avatar {
         self.lease.check();
         const image = c.sw_avatar(@intFromEnum(user), @intFromEnum(size));
         return if (image < 0) .pending else if (image == 0) .none else .{ .image = @enumFromInt(image) };
     }
-    /// Query before allocating caller-owned storage; no avatar dimensions are assumed.
+    /// ISteamUtils::GetImageSize; query before allocating caller-owned RGBA storage.
+    /// Works for achievement icons too; no avatar dimensions are assumed.
     pub fn imageSize(self: Friends, image: types.ImageHandle) !ImageSize {
         if (@intFromEnum(image) <= 0) return error.InvalidImage;
         self.lease.check();
@@ -181,7 +220,9 @@ pub const Friends = struct {
         try accepted(c.sw_image_size(@intFromEnum(image), &size.width, &size.height));
         return size;
     }
-    /// Returns the dimensions actually copied, which callers should use to upload pixels.
+    /// ISteamUtils::GetImageRGBA copies tightly packed RGBA8 into caller storage.
+    /// Require imageSize().rgbaBytes() capacity; returns dimensions for the copied
+    /// pixels. No GPU upload or image cache is created by this wrapper.
     pub fn readImage(self: Friends, image: types.ImageHandle, buffer: []u8) !ImageSize {
         const size = try self.imageSize(image);
         const bytes = try size.rgbaBytes();
@@ -191,23 +232,29 @@ pub const Friends = struct {
     }
 };
 
+/// ISteamApps read-only license, installation and language queries.
+/// Borrowed language strings must be copied before another Steam call/pump/close.
+/// Valve: https://partner.steamgames.com/doc/api/ISteamApps
 pub const Apps = struct {
     lease: Context.Lease,
     pub const Dlc = struct { app: AppId, available: bool, name: []const u8 };
     pub const Download = struct { downloaded: u64, total: u64 };
+    /// ISteamApps::BIsSubscribed: active user's license for the current app.
     pub fn subscribed(self: Apps) bool {
         self.lease.check();
         return c.sw_subscribed() != 0;
     }
+    /// ISteamApps::BIsSubscribedApp checks entitlement, not installation.
     pub fn owns(self: Apps, app: AppId) bool {
         self.lease.check();
         return c.sw_owns_app(@intFromEnum(app)) != 0;
     }
-    /// Installation does not prove ownership.
+    /// ISteamApps::BIsAppInstalled; installation does not prove ownership.
     pub fn installed(self: Apps, app: AppId) bool {
         self.lease.check();
         return c.sw_app_installed(@intFromEnum(app)) != 0;
     }
+    /// ISteamApps::BIsDlcInstalled checks both ownership and installation of DLC.
     pub fn dlcInstalled(self: Apps, app: AppId) bool {
         self.lease.check();
         return c.sw_dlc_installed(@intFromEnum(app)) != 0;
@@ -228,24 +275,32 @@ pub const Apps = struct {
         try accepted(c.sw_dlc_data(i, &app, &available, buffer.ptr, capacity));
         return .{ .app = @enumFromInt(app), .available = available != 0, .name = types.text(buffer) };
     }
+    /// ISteamApps::GetDlcDownloadProgress; downloaded and total are byte counts.
+    /// Native false becomes OperationFailed, not a zero-progress reading.
     pub fn dlcProgress(self: Apps, app: AppId) !Download {
         self.lease.check();
         var result: Download = undefined;
         try accepted(c.sw_dlc_progress(@intFromEnum(app), &result.downloaded, &result.total));
         return result;
     }
+    /// ISteamApps::GetCurrentGameLanguage; borrowed language name, not a locale enum.
+    /// Copy before another Steam call, pump or close.
     pub fn language(self: Apps) []const u8 {
         self.lease.check();
         return borrowed(c.sw_game_language());
     }
+    /// ISteamApps::GetAvailableGameLanguages; borrowed comma-separated language names.
+    /// Copy before another Steam call, pump or close.
     pub fn availableLanguages(self: Apps) []const u8 {
         self.lease.check();
         return borrowed(c.sw_available_languages());
     }
+    /// ISteamApps::GetAppOwner; license owner may differ from the active user.
     pub fn owner(self: Apps) SteamId {
         self.lease.check();
         return @enumFromInt(c.sw_app_owner());
     }
+    /// ISteamApps::GetAppBuildId; current native build identifier, not an AppId.
     pub fn buildId(self: Apps) i32 {
         self.lease.check();
         return c.sw_build_id();
@@ -262,7 +317,10 @@ pub const Apps = struct {
     }
 };
 
-/// SDK 1.65 synchronizes current-user stats at launch. No RequestCurrentStats call is needed.
+/// ISteamUserStats. SDK 1.65 synchronizes current-user stats at launch; no
+/// RequestCurrentStats call is needed. Setters change local state; store submits
+/// persistence. Backend stat/achievement names and types must match app setup.
+/// Valve: https://partner.steamgames.com/doc/api/ISteamUserStats
 pub const Stats = struct {
     lease: Context.Lease,
     pub const Achievement = struct { unlocked: bool, unlocked_at: u32 };
@@ -351,7 +409,9 @@ pub const Stats = struct {
         try available(native.sw_stats_achievement_icon(key.ptr, &image));
         return @enumFromInt(image);
     }
-    /// Finds only; never creates a backend leaderboard.
+    /// ISteamUserStats::FindLeaderboard; never creates a backend leaderboard.
+    /// Take the LeaderboardFindResult_t (leaderboard_found) completion and check
+    /// found before using leaderboard; request acceptance alone proves neither.
     pub fn findLeaderboard(self: Stats, key: [:0]const u8) !Request(.leaderboard_found) {
         return self.findLeaderboardWith(c, key);
     }
@@ -428,6 +488,9 @@ pub const Stats = struct {
         self.lease.context.leaderboard_upload_call = call;
         return request;
     }
+    /// ISteamUserStats::RequestGlobalAchievementPercentages. Take the matching
+    /// GlobalAchievementPercentagesReady_t (global_percentages_ready) and check
+    /// result == .ok before reading percentages; no implicit fetch on reads.
     pub fn requestGlobalPercentages(self: Stats) !Request(.global_percentages_ready) {
         return self.requestGlobalPercentagesWith(c);
     }
@@ -476,6 +539,8 @@ pub const Stats = struct {
             else => error.InvalidNativeResult,
         };
     }
+    /// ISteamUserStats::GetStat (int32): cached current-user stat by backend name.
+    /// Native false is OperationFailed, not a default zero.
     pub fn getInt(self: Stats, key: [:0]const u8) !i32 {
         try name(key);
         self.lease.check();
@@ -483,6 +548,8 @@ pub const Stats = struct {
         try accepted(c.sw_stat_int(key.ptr, &value));
         return value;
     }
+    /// ISteamUserStats::GetStat (float): cached current-user stat by backend name.
+    /// Native false is OperationFailed; returned native float bits are preserved.
     pub fn getFloat(self: Stats, key: [:0]const u8) !f32 {
         try name(key);
         self.lease.check();
@@ -490,17 +557,22 @@ pub const Stats = struct {
         try accepted(c.sw_stat_float(key.ptr, &value));
         return value;
     }
+    /// ISteamUserStats::SetStat (int32) changes local cached state; call store to persist.
     pub fn setInt(self: Stats, key: [:0]const u8, value: i32) !void {
         try name(key);
         self.lease.check();
         try accepted(c.sw_set_stat_int(key.ptr, value));
     }
+    /// ISteamUserStats::SetStat (float) changes local state; rejects non-finite input.
+    /// Call store to submit persistence, then inspect stats_stored.result.
     pub fn setFloat(self: Stats, key: [:0]const u8, value: f32) !void {
         try name(key);
         if (!std.math.isFinite(value)) return error.InvalidValue;
         self.lease.check();
         try accepted(c.sw_set_stat_float(key.ptr, value));
     }
+    /// ISteamUserStats::GetAchievementAndUnlockTime. unlocked_at is Unix seconds;
+    /// zero can mean locked or an unlocked achievement without a recorded time.
     pub fn achievement(self: Stats, key: [:0]const u8) !Achievement {
         try name(key);
         self.lease.check();
@@ -509,11 +581,14 @@ pub const Stats = struct {
         try accepted(c.sw_achievement(key.ptr, &unlocked, &time));
         return .{ .unlocked = unlocked != 0, .unlocked_at = time };
     }
+    /// ISteamUserStats::SetAchievement updates local state; store submits persistence.
     pub fn unlock(self: Stats, key: [:0]const u8) !void {
         try name(key);
         self.lease.check();
         try accepted(c.sw_unlock_achievement(key.ptr));
     }
+    /// ISteamUserStats::ClearAchievement resets local unlock state; store submits it.
+    /// Destructive achievement change: use only explicit application intent.
     pub fn clear(self: Stats, key: [:0]const u8) !void {
         try name(key);
         self.lease.check();
@@ -530,11 +605,15 @@ pub const Stats = struct {
         self.lease.check();
         return c.sw_achievement_count();
     }
+    /// ISteamUserStats::GetAchievementName: backend name at a zero-based index.
+    /// Borrows SDK text until another Steam call/pump/close; copy before retaining.
     pub fn achievementName(self: Stats, index: u32) ![]const u8 {
         self.lease.check();
         if (index >= c.sw_achievement_count()) return error.InvalidIndex;
         return borrowed(c.sw_achievement_name(index));
     }
+    /// ISteamUserStats::GetAchievementDisplayAttribute: localized name/description
+    /// or the native hidden string. Borrows SDK text until another Steam call/pump/close.
     pub fn attribute(self: Stats, key: [:0]const u8, attr: Attribute) ![]const u8 {
         try name(key);
         self.lease.check();
@@ -545,7 +624,8 @@ pub const Stats = struct {
         };
         return borrowed(c.sw_achievement_attribute(key.ptr, field.ptr));
     }
-    /// Acceptance is not completion. Observe stats_stored and its Steam result.
+    /// ISteamUserStats::StoreStats submits cached changes. Observe UserStatsStored_t
+    /// (stats_stored) and its result; acceptance does not establish persistence.
     pub fn store(self: Stats) !void {
         self.lease.check();
         try accepted(c.sw_store_stats());
@@ -586,6 +666,10 @@ pub const Stats = struct {
     }
 };
 
+/// ISteamRemoteStorage named cloud files and explicit write-batch hints.
+/// Paths passed to file operations are Steam filenames, not arbitrary OS paths.
+/// Writes/deletes affect persistent saves; no conflict or retry policy is supplied.
+/// Valve: https://partner.steamgames.com/doc/api/ISteamRemoteStorage
 pub const Cloud = struct {
     lease: Context.Lease,
     pub const Quota = struct { total: u64, available: u64 };
@@ -680,10 +764,12 @@ pub const Cloud = struct {
             return if (result == 0) .no_native_batch else .ended;
         }
     };
+    /// ISteamRemoteStorage::IsCloudEnabledForAccount; app enablement is separate.
     pub fn enabledForAccount(self: Cloud) bool {
         self.lease.check();
         return c.sw_cloud_account_enabled() != 0;
     }
+    /// ISteamRemoteStorage::IsCloudEnabledForApp; account enablement is separate.
     pub fn enabledForApp(self: Cloud) bool {
         self.lease.check();
         return c.sw_cloud_app_enabled() != 0;
@@ -693,6 +779,8 @@ pub const Cloud = struct {
         self.lease.check();
         return c.sw_cloud_exists(path.ptr) != 0;
     }
+    /// ISteamRemoteStorage::GetFileSize after FileExists. Returns bytes or
+    /// FileNotFound; a later read can observe a changed file.
     pub fn fileSize(self: Cloud, path: [:0]const u8) !usize {
         try name(path);
         self.lease.check();
@@ -712,13 +800,18 @@ pub const Cloud = struct {
         if (expected == 0) return buffer[0..0];
         return readResult(buffer, c.sw_cloud_read(path.ptr, buffer.ptr, capacity), expected);
     }
+    /// ISteamRemoteStorage::FileWrite synchronously replaces this named file.
+    /// Borrows input for this call only. OperationFailed preserves native false;
+    /// success is not a remote-cloud synchronization acknowledgement.
     pub fn write(self: Cloud, path: [:0]const u8, bytes: []const u8) !void {
         try name(path);
         const size = try types.count(bytes.len);
         self.lease.check();
         try accepted(c.sw_cloud_write(path.ptr, bytes.ptr, size));
     }
-    /// Steam copies the input during this call. Observe cloud_written for completion.
+    /// ISteamRemoteStorage::FileWriteAsync copies input during this call.
+    /// Take RemoteStorageFileWriteAsyncComplete_t (cloud_written) and inspect its
+    /// result. Returning a Request means accepted, not successful file persistence.
     pub fn writeAsync(self: Cloud, path: [:0]const u8, bytes: []const u8) !Request(.cloud_written) {
         try name(path);
         const size = std.math.cast(u32, bytes.len) orelse return error.TooLarge;
@@ -731,6 +824,7 @@ pub const Cloud = struct {
         self.lease.check();
         try accepted(c.sw_cloud_delete(path.ptr));
     }
+    /// ISteamRemoteStorage::GetQuota; total and available are bytes, not file counts.
     pub fn quota(self: Cloud) !Quota {
         self.lease.check();
         var result: Quota = undefined;
@@ -741,6 +835,9 @@ pub const Cloud = struct {
         self.lease.check();
         return count(c.sw_cloud_file_count());
     }
+    /// ISteamRemoteStorage::GetFileNameAndSize; zero-based index below fileCount.
+    /// size is bytes; name borrows SDK storage until another Steam call/pump/close.
+    /// Copy name before further enumeration or file operations.
     pub fn fileAt(self: Cloud, index: usize) !File {
         const i = try types.count(index);
         self.lease.check();

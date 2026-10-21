@@ -7,6 +7,32 @@ a dependency. This is a focused API, not a binding to every SDK feature.
 Targets: macOS arm64/x86_64, Linux x86_64 with glibc, and Windows x86_64.
 Windows GNU is the verified cross-compilation target at the extraction baseline.
 
+## Start here
+
+1. [Set up the SDK](#setup-and-build), then [add the package to your game](#consume-as-a-package).
+2. Read [the small client example](examples/client.zig) and [Client and event loop](#client-and-event-loop).
+3. Set up [editor navigation](#editor-setup) so hover and go-to-definition open the pinned library source.
+4. Follow the feature's Zig declarations alongside Valve's documentation. The
+   [public root](src/root.zig) is the source index; methods document ownership,
+   completion and cleanup at the point of use.
+
+| Zig entry point | Valve reference |
+| --- | --- |
+| [`Client`](src/Client.zig) | [Initialization and dispatch](https://partner.steamgames.com/doc/sdk/api), [ISteamUser](https://partner.steamgames.com/doc/api/ISteamUser) |
+| [`Event`](src/events.zig), [`Request`](src/requests.zig) | [Callbacks and call results](https://partner.steamgames.com/doc/sdk/api#callbacks) |
+| [`Lobbies`](src/Lobbies.zig) | [ISteamMatchmaking](https://partner.steamgames.com/doc/api/ISteamMatchmaking) |
+| [`Networking`](src/Networking.zig) | [ISteamNetworkingSockets](https://partner.steamgames.com/doc/api/ISteamNetworkingSockets) |
+| [`NetworkingConfig`](src/NetworkingConfig.zig), [`NetworkingDebug`](src/NetworkingDebug.zig) | [ISteamNetworkingUtils](https://partner.steamgames.com/doc/api/ISteamNetworkingUtils) |
+| [`Friends`, `Apps`, `Stats`, `Cloud`](src/services.zig) | [ISteamFriends](https://partner.steamgames.com/doc/api/ISteamFriends), [ISteamApps](https://partner.steamgames.com/doc/api/ISteamApps), [ISteamUserStats](https://partner.steamgames.com/doc/api/ISteamUserStats), [ISteamRemoteStorage](https://partner.steamgames.com/doc/api/ISteamRemoteStorage) |
+| [`Utils`](src/Utils.zig), [`Input`](src/Input.zig) | [ISteamUtils](https://partner.steamgames.com/doc/api/ISteamUtils), [ISteamInput](https://partner.steamgames.com/doc/api/ISteamInput) |
+| [`Voice`](src/Voice.zig), [`RemotePlay`](src/RemotePlay.zig) | [ISteamUser](https://partner.steamgames.com/doc/api/ISteamUser), [ISteamRemotePlay](https://partner.steamgames.com/doc/api/ISteamRemotePlay) |
+| [`Workshop`](src/Workshop.zig), [`Screenshots`](src/Screenshots.zig), [`Timeline`](src/Timeline.zig) | [ISteamUGC](https://partner.steamgames.com/doc/api/ISteamUGC), [ISteamScreenshots](https://partner.steamgames.com/doc/api/ISteamScreenshots), [ISteamTimeline](https://partner.steamgames.com/doc/api/ISteamTimeline) |
+
+Valve's reference describes native behavior; the Zig declarations describe the
+wrapper's storage and error contracts. The supplied SDK **1.65 headers** are the
+version authority when living web documentation differs. Not every native method
+is exposed, and Steamworkz does not replace game networking or save-management code.
+
 ## Setup and build
 
 Obtain the official SDK under your Steamworks agreement. Keep it outside this
@@ -27,6 +53,32 @@ fails with setup instructions; there is no `./sdk` fallback or automatic downloa
 The build installs `steamworkz-smoke` and the appropriate official runtime in
 `zig-out/bin`. These generated outputs must not enter the source package.
 
+### Focused examples
+
+```sh
+zig build examples -Dsdk=/absolute/path/to/sdk
+```
+
+This compiles/installs three short programs without executing them:
+
+| Source | Teaches | Actions if you explicitly run it |
+| --- | --- | --- |
+| [`examples/client.zig`](examples/client.zig) | Stable Client storage, diagnostic handling, copied names and frame/event pumping | Initializes Steam and makes read-only queries |
+| [`examples/lobby.zig`](examples/lobby.zig) | Request correlation, operation results, membership cleanup and uncertain outcomes | Requests one private lobby and leaves observed owned membership |
+| [`examples/messages.zig`](examples/messages.zig) | Send acceptance and received-batch `defer` cleanup | Exchanges a message over a local socket pair |
+
+The executables are `steamworkz-example-client`, `steamworkz-example-lobby` and
+`steamworkz-example-messages` in `zig-out/bin`. They require a running Steam client
+and an explicitly supplied development App ID when launched outside Steam. They
+never relaunch the app or create an app-id file. For an authorized manual check,
+set `SteamAppId=480` and `SteamGameId=480` for that process only; use your own app
+when appropriate. Building or testing does **not** launch these programs.
+
+Their short polling loops are demonstration policy, not a scheduler to embed in
+a game. Use your existing frame loop and keep all calls on the initializing
+thread. The broader [`smoke.zig`](examples/smoke.zig) is a live validation program,
+not the starting application template.
+
 There is **no JavaScript, Node, Bun, alignment generator, or separate binding
 build step**. `build.zig` compiles our small C++ bridge against Valve's headers.
 Packed SDK structures never cross into Zig. Our private C boundary contains
@@ -38,8 +90,9 @@ It does not require an additional C++ standard library.
 
 | Command | Effect |
 | --- | --- |
-| `zig build` | Compile/link the headless example; install it and the runtime |
-| `zig build test` | Run offline Zig tests, thirteen C++ fixtures, lifecycle/networking/platform/capability guards, and the consumer/probes |
+| `zig build` | Compile/link the headless smoke program; install it and the runtime |
+| `zig build examples` | Compile/link/install the focused learning examples and runtime, without execution |
+| `zig build test` | Run offline Zig tests, thirteen C++ fixtures, lifecycle/networking/platform/capability guards, and the consumer/probes; compile the learning examples without executing them |
 | `zig build test-core` / `test-services` | Run the focused native callback or inert service-adapter fixture |
 | `zig build test-lifecycle` | Check public fatal guards in separate bounded processes, with passing controls |
 | `zig build test-properties` | Run deterministic bounded parser/text/event properties |
@@ -133,6 +186,9 @@ const steamworkz = b.dependency("steamworkz", .{
 });
 exe.root_module.addImport("steamworkz", steamworkz.module("steamworkz"));
 if (target.result.os.tag == .linux) {
+    // Zig 0.16's native ELF linker cannot handle newer CRT .sframe relocations.
+    exe.use_llvm = true;
+    exe.use_lld = true;
     // Keep SDK lookup at link time; preserve the explicit $ORIGIN runtime path.
     exe.each_lib_rpath = false;
 }
@@ -196,6 +252,47 @@ a globally installed copy. Copy the install folder elsewhere and verify library
 resolution with `LD_LIBRARY_PATH` and `LD_PRELOAD` unset. A loader-only inspection
 checks deployment without initializing Steam; actual game execution is a separate
 live check.
+
+## Editor setup
+
+Use matching **Zig 0.16.0 and ZLS 0.16.0**. Start the editor/language server with
+`STEAMWORKS_SDK` available, or supply the library's `sdk` build option through a
+local `zls.build.json`. A terminal export does not update an already-running editor.
+The SDK is still external; no header copy or binding-generation step is needed.
+
+ZLS evaluates the build graph to discover imports. If the game conditionally adds
+Steamworkz, enable that option for the editor too. For Meikyuu's `steamworks`
+option, place this **local editor configuration** beside the game's `build.zig`:
+
+```json
+{
+  "build_options": [
+    { "name": "steamworks", "value": "true" }
+  ]
+}
+```
+
+Keep the SDK path in the editor's environment rather than in versioned JSON.
+Other consumers should substitute their own enable-option name, or omit this
+file when Steamworkz is always imported. Library development itself needs no
+`steamworks` flag; it needs the SDK configuration described above.
+See [ZLS per-build configuration](https://zigtools.org/zls/configure/per-build/).
+
+After reloading ZLS, try `@import("steamworkz")` → `Client.init`, then a service
+method and its request result. Navigation should open the dependency **revision
+pinned by the game**, not an unrelated sibling checkout. A successful SDK-free
+build configuration can still omit Steamworkz entirely; unresolved Steam imports
+in that mode do not mean the package is broken.
+
+ZLS 0.16 has a remaining generic-navigation limitation: the tested lobby
+completion fields navigate to `Event.LobbyCreated`, but `take` hover can list
+multiple possible results and its method go-to-definition may not resolve.
+Open [`Request`](src/requests.zig) directly in that case; the compiler still
+specializes and checks the exact completion type without caller annotations.
+
+For the private C++ adapter, `zig build tooling -Dsdk=...` writes a gitignored
+`compile_commands.json` for clangd. It is not needed to use the public Zig API;
+keep generated configuration and its SDK paths out of the source package.
 
 ## Client and event loop
 
@@ -942,10 +1039,15 @@ SDK rather than copied layouts. Offline identity text is substituted because
 Valve's formatter requires a live interface.
 
 Current execution state and evidence are recorded in [CHECKPOINT.md](CHECKPOINT.md);
-planned work and acceptance gates are in [ROADMAP.md](ROADMAP.md). Historical
-macOS arm64 live evidence predates extraction and is distinct from new offline
-checks and cross-target compile/link success. Remote/multi-account
-connections, authentication validation against a peer/backend, graphical overlays,
+planned work and acceptance gates are in [ROADMAP.md](ROADMAP.md).
+Published M4's existing headless smoke also passed in Debug/ReleaseFast on macOS
+arm64, covering basic local socket, private-lobby and ticket lifecycle behavior.
+That evidence is distinct from new offline checks and does not cover the optional
+services or this uncommitted batch. A later bounded native Arch game
+check initialized App ID 480 and rendered three frames; its separate offline and
+deployment evidence is in the game's [Arch validation record](https://github.com/yo-reign/meikyuu-zig/blob/3137046a5d0019d0274544371f43a552dcf03ef3/docs/arch-linux-validation.md).
+That check does not validate optional services or the current uncommitted changes.
+Remote/multi-account connections, authentication validation against a peer/backend, graphical overlays,
 configured achievement/cloud writes, native leaderboard/percentage behavior,
 physical Input/keyboard/glyph/handheld behavior, and other-platform runtime behavior
 need separate tests. Voice devices, Remote Play, Workshop downloads, screenshot

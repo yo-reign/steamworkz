@@ -8,6 +8,10 @@ const spawn_api = if (builtin.os.tag == .windows) struct {} else @cImport({
     @cInclude("spawn.h");
 });
 const posix = if (builtin.os.tag == .windows) struct {} else @cImport({
+    // Import libc ABI declarations, not glibc's fortified C inline wrappers:
+    // Zig 0.16 cannot translate variadic open/openat wrappers in ReleaseSafe.
+    // This affects this declaration import only, not native C/C++ hardening.
+    if (builtin.os.tag == .linux) @cUndef("_FORTIFY_SOURCE");
     @cInclude("fcntl.h");
     @cInclude("unistd.h");
     @cInclude("paths.h");

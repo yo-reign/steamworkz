@@ -8,15 +8,31 @@ pub const Error = error{ ResultUnavailable, IoFailure, MalformedResult, Unexpect
 
 /// Allocation-free correlation for an API-call result. Keep one tracker per
 /// operation and discard it when its client session ends. This does not pump
-/// events, own a native resource, or provide native cancellation.
+/// events, own a native resource, or provide native cancellation. `kind` selects
+/// an Event payload; unsupported broadcast-only kinds fail at compile time.
+/// Acceptance (`init`), completion retrieval (`take`) and the payload's operation
+/// result are separate outcomes. Use the matching client session's events only.
 pub fn Request(comptime kind: std.meta.Tag(Payload)) type {
-    switch (kind) {
-        .lobby_created, .lobby_entered, .lobby_list, .stats_received, .cloud_written, .leaderboard_found, .leaderboard_entries, .leaderboard_uploaded, .global_percentages_ready, .workshop_query_completed => {},
+    return switch (kind) {
+        .lobby_created => Tracker(Event.LobbyCreated, .lobby_created),
+        .lobby_entered => Tracker(Event.LobbyEntered, .lobby_entered),
+        .lobby_list => Tracker(u32, .lobby_list),
+        .stats_received => Tracker(Event.StatsReceived, .stats_received),
+        .cloud_written => Tracker(types.Result, .cloud_written),
+        .leaderboard_found => Tracker(Event.LeaderboardFound, .leaderboard_found),
+        .leaderboard_entries => Tracker(types.LeaderboardEntries, .leaderboard_entries),
+        .leaderboard_uploaded => Tracker(Event.LeaderboardUploaded, .leaderboard_uploaded),
+        .global_percentages_ready => Tracker(Event.GlobalPercentagesReady, .global_percentages_ready),
+        .workshop_query_completed => Tracker(Event.WorkshopQueryCompleted, .workshop_query_completed),
         else => @compileError("This event does not complete an exposed API-call request"),
-    }
+    };
+}
+
+fn Tracker(comptime CompletionValue: type, comptime kind: std.meta.Tag(Payload)) type {
     return struct {
         const Self = @This();
-        pub const Value = @FieldType(Payload, @tagName(kind));
+        /// Owned completion payload, identical to the selected Event variant.
+        pub const Value = CompletionValue;
 
         /// Becomes invalid after the first matching completion, including failure.
         call: types.ApiCall = .invalid,
@@ -27,6 +43,7 @@ pub fn Request(comptime kind: std.meta.Tag(Payload)) type {
             return .{ .call = call };
         }
 
+        /// Whether a matching completion has yet to be observed, not native readiness.
         pub fn isPending(self: Self) bool {
             return self.call != .invalid;
         }
@@ -120,6 +137,7 @@ test "each exposed asynchronous operation has a typed completion" {
     };
     inline for (cases) |case| {
         const T = Request(case[0]);
+        try std.testing.expect(T.Value == @FieldType(Payload, @tagName(case[0])));
         std.testing.refAllDecls(T);
         try std.testing.expectError(error.RequestRejected, T.init(.invalid));
         var request = try T.init(@enumFromInt(1));

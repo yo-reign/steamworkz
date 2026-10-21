@@ -1,3 +1,5 @@
+//! Explicit SDK diagnostic capture, separate from Client gameplay events.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamNetworkingUtils#SetDebugOutputFunction
 const std = @import("std");
 const builtin = @import("builtin");
 const Context = @import("Context.zig");
@@ -47,7 +49,8 @@ pub const Capture = struct {
         dropped_contention: u32,
     };
 
-    /// Accepts the SDK's active levels 1..8. Use stop, not level zero, to disable.
+    /// ISteamNetworkingUtils::SetDebugOutputFunction registers the private bounded
+    /// sink, not a caller callback. Accepts levels 1..8; use stop, not zero, to disable.
     /// Registration has no asynchronous completion or delivery guarantee.
     pub fn start(self: Capture, level: Level) error{ AlreadyStarted, InvalidLevel, Unavailable }!void {
         self.lease.check();

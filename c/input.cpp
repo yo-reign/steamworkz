@@ -234,7 +234,10 @@ extern "C" int32_t sw_input_analog_data(uint64_t controller, uint64_t action, sw
     auto *const input = SteamAPI_SteamInput_v007();
     if (!input) return -1;
     const auto data = SteamAPI_ISteamInput_GetAnalogActionData(input, controller, action);
-    out->mode = enum_bits(data.eMode); out->x = data.x; out->y = data.y; out->active = data.bActive;
+    // The SDK packs this struct to byte alignment; do not bind an enum reference.
+    static_assert(sizeof(data.eMode) == sizeof(out->mode), "Input enum width changed");
+    memcpy(&out->mode, &data.eMode, sizeof(out->mode));
+    out->x = data.x; out->y = data.y; out->active = data.bActive;
     return 0;
 }
 extern "C" int32_t sw_input_origins(bool analog, uint64_t controller, uint64_t set, uint64_t action, int32_t *out, size_t capacity, size_t *count) {

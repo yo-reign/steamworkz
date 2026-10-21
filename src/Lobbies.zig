@@ -2,8 +2,10 @@
 //! snapshots. Serialize searches across all Lobbies copies and other SDK callers;
 //! consume/copy the completed list before starting another search. There is no
 //! native lobby-search cancellation exposed here. Correlate create/join/list
-//! results using the returned typed Request, not ordinary broadcast events. Creating also emits a LobbyEnter event. The parent Client
-//! owns dispatch, completion decoding, and this borrowed lease.
+//! results using the returned typed Request, not ordinary broadcast events.
+//! Creating also emits LobbyEnter_t. Client owns dispatch and this borrowed lease;
+//! dropping a Request does not cancel work or leave a lobby joined later.
+//! Valve reference: https://partner.steamgames.com/doc/api/ISteamMatchmaking
 const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
@@ -93,7 +95,10 @@ pub const CreateOptions = struct {
     member_limit: u32,
 };
 
-/// Acceptance starts a request. Check the matching completion's Steam result.
+/// ISteamMatchmaking::CreateLobby; member_limit is 1..250. Call Client.runFrame,
+/// drain nextEvent into Request.take: LobbyCreated_t maps to lobby_created. Only
+/// result == .ok establishes creation and membership; then use lobby and later
+/// leave explicitly. The additional LobbyEnter_t broadcast is not this result.
 pub fn create(self: Lobbies, options: CreateOptions) Error!Request(.lobby_created) {
     try validateType(options.visibility);
     try validateLimit(options.member_limit);
@@ -101,19 +106,29 @@ pub fn create(self: Lobbies, options: CreateOptions) Error!Request(.lobby_create
     return Request(.lobby_created).init(@enumFromInt(c.sw_lobbies_create(@intFromEnum(options.visibility), @intCast(options.member_limit))));
 }
 
+/// ISteamMatchmaking::JoinLobby. The returned Request means accepted, not joined.
+/// Feed pumped events to take; LobbyEnter_t maps to lobby_entered. Check
+/// response == .success before using membership/metadata. Leave explicitly when
+/// finished; abandoning the tracker neither cancels the join nor leaves for you.
 pub fn join(self: Lobbies, lobby: SteamId) Error!Request(.lobby_entered) {
     try validateId(lobby);
     self.lease.check();
     return Request(.lobby_entered).init(@enumFromInt(c.sw_lobbies_join(@intFromEnum(lobby))));
 }
 
-/// SDK void operation: success means submitted, not server acknowledgement.
+/// ISteamMatchmaking::LeaveLobby ends local membership. SDK void operation:
+/// success means submitted, not server acknowledgement.
 pub fn leave(self: Lobbies, lobby: SteamId) Error!void {
     try validateId(lobby);
     self.lease.check();
     try succeeded(c.sw_lobbies_leave(@intFromEnum(lobby)));
 }
 
+/// ISteamMatchmaking::RequestLobbyList after AddRequestLobbyList* filters.
+/// Pump/poll Client and take the LobbyMatchList_t result (lobby_list): its u32
+/// count bounds lobbyAt, including zero. There is no separate operation-result
+/// field; retrieval/I/O failures are Request.take errors. Copy IDs before another
+/// search, including one started through another facade.
 /// Allocation and ALL validation precede any native filter mutation. The bridge
 /// adds the complete filter sequence and immediately requests the list, which
 /// clears the native filters. An invalid call handle cannot be cancelled/retried
@@ -126,7 +141,7 @@ pub fn requestList(self: Lobbies, allocator: std.mem.Allocator, filters: []const
     return Request(.lobby_list).init(@enumFromInt(c.sw_lobbies_request_list(native.ptr, native.len)));
 }
 
-/// matching_count must come from the successful LobbyMatchList completion of
+/// ISteamMatchmaking::GetLobbyByIndex. matching_count comes from LobbyMatchList_t of
 /// the latest search. It is a bound, NOT a snapshot/token: starting another
 /// search invalidates this association, even on another Lobbies copy.
 pub fn lobbyAt(self: Lobbies, index: usize, matching_count: u32) Error!SteamId {
@@ -135,20 +150,23 @@ pub fn lobbyAt(self: Lobbies, index: usize, matching_count: u32) Error!SteamId {
     return steamId(c.sw_lobbies_at(native_index));
 }
 
-/// Requires membership. Zero does not prove that the lobby exists.
+/// ISteamMatchmaking::GetNumLobbyMembers requires membership.
+/// Zero does not prove that the lobby exists.
 pub fn memberCount(self: Lobbies, lobby: SteamId) Error!u32 {
     try validateId(lobby);
     self.lease.check();
     return nativeCount(c.sw_lobbies_member_count(@intFromEnum(lobby)));
 }
 
+/// ISteamMatchmaking::GetLobbyMemberByIndex with a zero-based index checked
+/// against the current memberCount. Requires membership; enumeration is not atomic.
 pub fn memberAt(self: Lobbies, lobby: SteamId, index: usize) Error!SteamId {
     const native_index = try checkedIndex(index, try self.memberCount(lobby));
     self.lease.check();
     return steamId(c.sw_lobbies_member_at(@intFromEnum(lobby), native_index));
 }
 
-/// Requires membership.
+/// ISteamMatchmaking::GetLobbyOwner requires membership; returns a user ID.
 pub fn owner(self: Lobbies, lobby: SteamId) Error!SteamId {
     try validateId(lobby);
     self.lease.check();
@@ -163,8 +181,8 @@ pub fn setOwner(self: Lobbies, lobby: SteamId, new_owner: SteamId) Error!void {
     try succeeded(c.sw_lobbies_set_owner(@intFromEnum(lobby), @intFromEnum(new_owner)));
 }
 
-/// Borrowed SDK text: copy before any further Steam call, callback pump or client
-/// close. Empty is the native ambiguous empty value (unset, explicitly empty, or
+/// ISteamMatchmaking::GetLobbyData. Borrowed SDK text: copy before another Steam
+/// call, callback pump or client close. Empty is ambiguous (unset, explicitly empty, or
 /// invalid/uncached lobby), NOT a proven missing key. Use dataCount/dataAt to
 /// inspect keys in a known-valid, populated cache; no network existence proof is
 /// implied. Never convert this result to null merely because it is empty.
@@ -185,8 +203,9 @@ pub fn dataAlloc(self: Lobbies, allocator: std.mem.Allocator, lobby: SteamId, ke
     return allocator.dupe(u8, try self.data(lobby, key));
 }
 
-/// Same borrowed lifetime and ambiguous empty semantics as data(). Steam has no
-/// member-metadata key enumeration, so an empty result cannot prove absence.
+/// ISteamMatchmaking::GetLobbyMemberData. Same borrowed lifetime and ambiguous
+/// empty semantics as data(). No member-metadata key enumeration exists, so an
+/// empty result cannot prove absence.
 pub fn memberData(self: Lobbies, lobby: SteamId, member: SteamId, key: [:0]const u8) Error![]const u8 {
     try validateId(lobby);
     try validateId(member);
@@ -255,8 +274,9 @@ pub fn dataAt(self: Lobbies, lobby: SteamId, index: usize, buffers: *MetadataBuf
     return .{ .key = try terminatedText(&buffers.key), .value = try terminatedText(&buffers.value) };
 }
 
-/// Refreshes a non-member lobby's metadata. Correlate the ordinary
-/// LobbyDataUpdate event by lobby ID; no ApiCall handle exists for this operation.
+/// ISteamMatchmaking::RequestLobbyData refreshes a non-member lobby's metadata.
+/// Correlate LobbyDataUpdate_t (lobby_data) by lobby ID and inspect success;
+/// native acceptance alone is insufficient. No ApiCall handle exists here.
 pub fn requestData(self: Lobbies, lobby: SteamId) Error!void {
     try validateId(lobby);
     self.lease.check();
@@ -271,12 +291,14 @@ pub fn invite(self: Lobbies, lobby: SteamId, invitee: SteamId) Error!void {
     try succeeded(c.sw_lobbies_invite(@intFromEnum(lobby), @intFromEnum(invitee)));
 }
 
+/// ISteamMatchmaking::SetLobbyJoinable; owner-only. False blocks even invitees.
 pub fn setJoinable(self: Lobbies, lobby: SteamId, joinable: bool) Error!void {
     try validateId(lobby);
     self.lease.check();
     try succeeded(c.sw_lobbies_set_joinable(@intFromEnum(lobby), @intFromBool(joinable)));
 }
 
+/// ISteamMatchmaking::SetLobbyType; owner-only visibility change.
 pub fn setType(self: Lobbies, lobby: SteamId, lobby_type: LobbyType) Error!void {
     try validateId(lobby);
     try validateType(lobby_type);
@@ -284,6 +306,7 @@ pub fn setType(self: Lobbies, lobby: SteamId, lobby_type: LobbyType) Error!void 
     try succeeded(c.sw_lobbies_set_type(@intFromEnum(lobby), @intFromEnum(lobby_type)));
 }
 
+/// ISteamMatchmaking::SetLobbyMemberLimit; owner-only, 1..250 members.
 pub fn setMemberLimit(self: Lobbies, lobby: SteamId, member_limit: u32) Error!void {
     try validateId(lobby);
     try validateLimit(member_limit);
@@ -298,6 +321,8 @@ pub fn memberLimit(self: Lobbies, lobby: SteamId) Error!u32 {
     return nativeCount(c.sw_lobbies_limit(@intFromEnum(lobby)));
 }
 
+/// ISteamMatchmaking::SendLobbyChatMsg broadcasts 1..4096 bytes to members,
+/// including the sender; observe LobbyChatMsg_t (lobby_chat) and readChat.
 /// Binary payload: no NUL appended. For text include a NUL yourself if desired.
 /// Empty messages are rejected because the native reader cannot distinguish an
 /// empty entry from failure (both return zero).
@@ -310,7 +335,8 @@ pub fn sendChat(self: Lobbies, lobby: SteamId, bytes: []const u8) Error!void {
 
 pub const Chat = struct { sender: SteamId, entry_type: ChatEntryType, bytes: []const u8 };
 
-/// chat_id comes from LobbyChatMsg. A full 4 KiB buffer is required to avoid
+/// ISteamMatchmaking::GetLobbyChatEntry; chat_id comes from lobby_chat
+/// (LobbyChatMsg_t). A full 4 KiB buffer is required to avoid
 /// silent truncation; only the returned prefix is initialized. Bytes borrow the
 /// caller's buffer. Unknown native entry types are preserved.
 pub fn readChat(self: Lobbies, lobby: SteamId, chat_id: u32, buffer: []u8) Error!Chat {

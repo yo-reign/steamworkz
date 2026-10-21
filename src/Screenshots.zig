@@ -1,6 +1,7 @@
 //! Borrowed owner-thread screenshot facade. Construction performs no action.
 //! The game owns pending input storage and its budget; this facade stores no
 //! caller pointers and has no queue, allocation, file loading or handle release.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamScreenshots
 const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
@@ -14,7 +15,9 @@ lease: Context.Lease,
 
 pub const Error = error{ InterfaceUnavailable, InvalidDimensions, InvalidRgbLength, InvalidPath, SubmissionRejected, HookAlreadyOwned, HookAlreadyActive };
 
-/// Submit mutable packed RGB bytes without copying or taking ownership.
+/// ISteamScreenshots::WriteScreenshot. Submit mutable packed RGB bytes without
+/// wrapper copying or ownership transfer. ScreenshotReady_t maps to screenshot_ready;
+/// match handle and inspect result independently of submission acceptance.
 /// Positive dimensions must fit native int; width*height*3 must fit uint32 and
 /// equal rgb.len. The SDK may modify input: preservation is not promised.
 /// A nonzero handle establishes submission only, not readiness or success.
@@ -36,6 +39,8 @@ pub fn submitRgbBorrowed(self: Screenshots, rgb: []u8, width: i64, height: i64) 
     return submission(handle);
 }
 
+/// ISteamScreenshots::AddScreenshotToLibrary; observe ScreenshotReady_t
+/// (screenshot_ready) for the returned handle and inspect result.
 /// Explicit absolute paths, NUL-free and at most 4096 bytes INCLUDING terminator.
 /// Windows requires a drive or complete UNC server/share; device namespaces,
 /// current-drive roots and drive-relative paths are rejected. No filesystem
@@ -57,8 +62,9 @@ pub fn submitFile(self: Screenshots, path: [:0]const u8, thumbnail: ?[:0]const u
     return submission(handle);
 }
 
-/// Explicit invocation only, not capture acknowledgement. With a hook this
-/// requests ScreenshotRequested; it does not submit image bytes.
+/// ISteamScreenshots::TriggerScreenshot: explicit invocation, not acknowledgement.
+/// With a hook, requests ScreenshotRequested_t (screenshot_requested), leaving
+/// image submission to the game. Without a hook, Steam handles capture.
 pub fn trigger(self: Screenshots) Error!void {
     self.lease.check();
     try available(native.sw_screenshots_trigger());

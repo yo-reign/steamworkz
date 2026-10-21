@@ -1,32 +1,33 @@
-#!/usr/bin/env python3
 """Optional, bounded local source/package check; never part of zig build test."""
 import argparse
 import hashlib
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
 import platform
 import re
+import shutil
 import subprocess
 import tarfile
+from pathlib import Path, PurePosixPath
 
-PACKAGE_FILES = frozenset("""
-build.zig build.zig.zon README.md LICENSE ROADMAP.md CHECKPOINT.md
-c/core.cpp c/core.h c/networking.cpp c/networking.h c/lobbies.cpp c/lobbies.h
-c/services.cpp c/services.h c/types.h c/utils.cpp c/utils.h c/input.cpp c/input.h
-c/networking_config.cpp c/networking_config.h c/networking_debug.cpp c/networking_debug.h
-c/voice.cpp c/voice.h c/remote_play.cpp c/remote_play.h c/timeline.cpp c/timeline.h
-c/workshop.cpp c/workshop.h c/screenshots.cpp c/screenshots.h
-src/Client.zig src/Context.zig src/Networking.zig src/NetworkingConfig.zig src/NetworkingDebug.zig
-src/Lobbies.zig src/events.zig src/Utils.zig src/Input.zig
-src/Voice.zig src/RemotePlay.zig src/Timeline.zig src/Workshop.zig src/Screenshots.zig
-src/native.zig src/requests.zig src/root.zig src/services.zig src/types.zig
-examples/smoke.zig tests/lifecycle_runner.zig tests/networking_guards.cpp tests/platform_guards.cpp tests/capability_guards.cpp
-tests/consumer/build.zig tests/consumer/build.zig.zon tests/consumer/main.zig tests/consumer/no_debug.zig
-tests/consumer/invalid_request.zig tests/consumer/invalid_image.zig
-tests/offline/check.py tests/offline/README.md
-""".split())
+PACKAGE_FILES = frozenset([
+    "build.zig", "build.zig.zon", "README.md", "LICENSE", "ROADMAP.md", "CHECKPOINT.md",
+    "c/core.cpp", "c/core.h", "c/networking.cpp", "c/networking.h", "c/lobbies.cpp", "c/lobbies.h",
+    "c/services.cpp", "c/services.h", "c/types.h", "c/utils.cpp", "c/utils.h", "c/input.cpp", "c/input.h",
+    "c/networking_config.cpp", "c/networking_config.h", "c/networking_debug.cpp", "c/networking_debug.h",
+    "c/voice.cpp", "c/voice.h", "c/remote_play.cpp", "c/remote_play.h", "c/timeline.cpp", "c/timeline.h",
+    "c/workshop.cpp", "c/workshop.h", "c/screenshots.cpp", "c/screenshots.h",
+    "src/Client.zig", "src/Context.zig", "src/Networking.zig", "src/NetworkingConfig.zig", "src/NetworkingDebug.zig",
+    "src/Lobbies.zig", "src/events.zig", "src/Utils.zig", "src/Input.zig",
+    "src/Voice.zig", "src/RemotePlay.zig", "src/Timeline.zig", "src/Workshop.zig", "src/Screenshots.zig",
+    "src/native.zig", "src/requests.zig", "src/root.zig", "src/services.zig", "src/types.zig",
+    "examples/smoke.zig", "examples/client.zig", "examples/lobby.zig", "examples/messages.zig",
+    "tests/lifecycle_runner.zig", "tests/networking_guards.cpp", "tests/platform_guards.cpp", "tests/capability_guards.cpp",
+    "tests/consumer/build.zig", "tests/consumer/build.zig.zon", "tests/consumer/main.zig", "tests/consumer/no_debug.zig",
+    "tests/consumer/invalid_request.zig", "tests/consumer/invalid_image.zig",
+    "tests/offline/check.py", "tests/offline/README.md",
+])
 REPOSITORY_FILES = PACKAGE_FILES | {".gitignore", "AGENTS.md", ".github/workflows/offline.yml"}
 MAX_FILE = 1024 * 1024
 MAX_TOTAL = 8 * MAX_FILE
@@ -105,7 +106,71 @@ def audit_archive(archive, package_hash, expected):
     return found
 
 
+def linux_elf_metadata(dynamic, program_headers):
+    needed = re.findall(r"\(NEEDED\).*?\[([^]]+)\]", dynamic)
+    require("libsteam_api.so" in needed, "ELF lost Steam runtime dependency")
+    require(not any("/" in name for name in needed), "ELF has path-qualified dependency")
+    paths = re.findall(r"\((?:RUNPATH|RPATH)\).*?\[([^]]*)\]", dynamic)
+    # These owned fixtures need no nonstandard library directory except adjacency.
+    require(paths == ["$ORIGIN"], "ELF must have only the explicit $ORIGIN search path")
+    interpreters = re.findall(r"Requesting program interpreter: ([^]]+)\]", program_headers)
+    require(len(interpreters) == 1 and Path(interpreters[0]).is_absolute(), "ELF interpreter missing/invalid")
+    return Path(interpreters[0])
+
+
+def linux_deployment(executables, sdk, evidence, run, env):
+    """Inspect trusted owned Linux artifacts; loader --list never enters main/init."""
+    require(platform.system() == "Linux" and platform.machine() == "x86_64",
+            "Linux deployment checks require a native x86_64 glibc host")
+    require(shutil.which("readelf") is not None, "Linux deployment checks require binutils readelf")
+    runtime = sdk / "redistributable_bin/linux64/libsteam_api.so"
+    clean_env = {key: value for key, value in env.items()
+                 if not key.startswith("LD_") and key not in ("STEAMWORKS_SDK", "SteamAppId", "SteamGameId", "GLIBC_TUNABLES")}
+    clean_env["LC_ALL"] = "C"
+    for index, executable in enumerate(executables):
+        label = "linux-" + str(index) + "-" + executable.name
+        dynamic = run(label + "-dynamic", ["readelf", "-dW", str(executable)], evidence, clean_env)
+        headers = run(label + "-headers", ["readelf", "-lW", str(executable)], evidence, clean_env)
+        loader = linux_elf_metadata(dynamic, headers)
+        require(loader.is_file(), "native ELF interpreter unavailable")
+        adjacent = executable.parent / runtime.name
+        require(adjacent.read_bytes() == runtime.read_bytes(), "installed runtime mismatch")
+        relocated = evidence / (label + "-relocated")
+        missing = evidence / (label + "-missing-runtime")
+        relocated.mkdir()
+        missing.mkdir()
+        shutil.copy2(executable, relocated / executable.name)
+        shutil.copy2(adjacent, relocated / runtime.name)
+        shutil.copy2(executable, missing / executable.name)
+        for location, binary in (("installed", executable), ("relocated", relocated / executable.name)):
+            output = run(label + "-" + location, [str(loader), "--inhibit-cache", "--list", str(binary)], evidence, clean_env)
+            resolved = re.findall(r"libsteam_api\.so => (.+?) \(0x[0-9a-fA-F]+\)", output)
+            require(len(resolved) == 1 and Path(resolved[0]).resolve() == binary.parent / runtime.name,
+                    "loader did not select adjacent runtime")
+        output = run(label + "-missing", [str(loader), "--inhibit-cache", "--list", str(missing / executable.name)],
+                     evidence, clean_env, expect_success=False)
+        require("libsteam_api.so: cannot open shared object file" in output,
+                "missing-runtime control did not fail for the Steam runtime")
+    return len(executables)
+
+
 def self_test():
+    dynamic = "(NEEDED) Shared library: [libsteam_api.so]\n(RUNPATH) Library runpath: [$ORIGIN]"
+    headers = "[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]"
+    linux_elf_metadata(dynamic, headers)
+    for bad_dynamic, bad_headers in (
+            (dynamic.replace("libsteam_api.so", "libother.so"), headers),
+            (dynamic.replace("libsteam_api.so", "/sdk/libsteam_api.so"), headers),
+            (dynamic.replace("$ORIGIN", "$ORIGIN:/sdk"), headers),
+            (dynamic.replace("$ORIGIN", ""), headers),
+            (dynamic.replace("$ORIGIN", "/sdk"), headers),
+            (dynamic + "\n(RPATH) Library rpath: [/sdk]", headers),
+            (dynamic, ""), (dynamic, headers.replace("/lib64/", ""))):
+        try:
+            linux_elf_metadata(bad_dynamic, bad_headers)
+        except RuntimeError:
+            continue
+        raise RuntimeError("invalid Linux deployment metadata accepted")
     for name in ("../x", "/x", "a/../b", "a\\b", "C:" + "/x", "a//b", "./x"):
         try:
             safe_name(name)
@@ -123,7 +188,7 @@ def self_test():
     import tempfile
     with tempfile.TemporaryDirectory() as directory:
         archive = Path(directory) / "probe.tar.gz"
-        expected = {name: b"owned text\n" for name in PACKAGE_FILES}
+        expected = dict.fromkeys(PACKAGE_FILES, b"owned text\n")
         for bad in (None, "link", "extra", "missing", "changed", "traversal", "duplicate"):
             with tarfile.open(archive, "w:gz") as tar:
                 for index, (name, data) in enumerate(sorted(expected.items())):
@@ -135,7 +200,7 @@ def self_test():
                 if bad in ("link", "extra", "traversal", "duplicate"):
                     name = "probe/extra" if bad != "traversal" else "probe/../escape"
                     if bad == "duplicate":
-                        name = "probe/" + sorted(expected)[0]
+                        name = "probe/" + min(expected)
                     member = tarfile.TarInfo(name)
                     if bad == "link":
                         member.type = tarfile.SYMTYPE
@@ -157,7 +222,10 @@ def main():
     parser.add_argument("--zig", default="zig")
     parser.add_argument("--run-consumer", action="store_true", help="run only the inspected pure installed consumer main")
     parser.add_argument("--self-test", action="store_true", help="run checker unit controls only (no SDK needed)")
+    parser.add_argument("--linux-install", type=Path, action="append", default=[],
+                        help="check only an existing Linux install prefix (repeatable); no builds or application execution")
     args = parser.parse_args()
+    require(not (args.linux_install and args.run_consumer), "--linux-install never executes applications; omit --run-consumer")
     self_test()
     if args.self_test:
         print("PASS: checker controls")
@@ -176,19 +244,38 @@ def main():
     for key in ("ZIG_LOCAL_CACHE_DIR", "ZIG_GLOBAL_CACHE_DIR", "ZIG_BUILD_RUNNER"):
         env.pop(key, None)
 
-    def run(label, command, cwd, run_env=None):
+    def run(label, command, cwd, run_env=None, expect_success=True):
         log = evidence / (label + ".log")
         with log.open("wb") as output:
-            result = subprocess.run(command, cwd=cwd, env=run_env or env, stdout=output, stderr=subprocess.STDOUT, timeout=600)
-        records.append({"label": label, "command": list(map(str, command)), "returncode": result.returncode})
+            result = subprocess.run(command, cwd=cwd, env=run_env or env, stdout=output, stderr=subprocess.STDOUT, timeout=600, check=False)
+        records.append({"label": label, "command": list(map(str, command)), "returncode": result.returncode,
+                        "expect_success": expect_success})
         (evidence / "commands.json").write_text(json.dumps(records, indent=2) + "\n")
-        require(result.returncode == 0, "command failed; inspect private log: " + label)
+        require((result.returncode == 0) == expect_success, "unexpected command status; inspect private log: " + label)
         return log.read_text()
 
     version = run("zig-version", [args.zig, "version"], evidence).strip()
     require(version == "0.16.0", "Zig 0.16.0 required")
     require((sdk / "public/steam/steam_api.h").is_file(), "SDK public headers missing")
     files = read_sources(root)
+    if args.linux_install:
+        executables = []
+        for prefix in args.linux_install:
+            binaries = prefix.resolve() / "bin"
+            found = [binaries / name for name in (
+                "steamworkz-smoke", "steamworkz-consumer", "steamworkz-no-debug",
+                "steamworkz-example-client", "steamworkz-example-lobby", "steamworkz-example-messages")
+                if (binaries / name).is_file()]
+            require(found, "no owned Linux executable in install prefix")
+            executables.extend(found)
+        count = linux_deployment(executables, sdk, evidence, run, env)
+        require(read_sources(root) == files, "source changed during check")
+        (evidence / "deployment.json").write_text(json.dumps({
+            "executables": list(map(str, executables)), "checked": count,
+            "source_sha256": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())},
+            "application_execution": False}, indent=2) + "\n")
+        print("PASS: Linux metadata, runtime bytes, installed/relocated lookup and missing-runtime controls:", count)
+        return
     snapshot, driver = evidence / "snapshot", evidence / "driver"
     snapshot.mkdir()
     driver.mkdir()
@@ -215,7 +302,7 @@ def main():
     common = ["-Dsdk=" + str(sdk), "-Doptimize=ReleaseFast", "-j2", "--summary", "all"]
     # Launch outside the package root. Nested builds must preserve cache paths
     # relative to the invoking process, not reinterpret them relative to build.zig.
-    run("relocated-test-install", [args.zig, "build", "test", "install", *common,
+    run("relocated-test-install", [args.zig, "build", "test", "install", "examples", *common,
         "--build-file", str(relocated / "build.zig"),
         "--cache-dir", str(evidence / "relocated-cache"), "--global-cache-dir", str(evidence / "relocated-global"),
         "--prefix", str(evidence / "relocated-install")], evidence)
@@ -243,6 +330,16 @@ def main():
     runtime = (sdk / "redistributable_bin" / runtime_dir / runtime_name).read_bytes()
     for install in ("relocated-install", "consumer-install"):
         require((evidence / install / "bin" / runtime_name).read_bytes() == runtime, "installed runtime mismatch")
+    linux_checked = 0
+    if host == "Linux":
+        linux_checked = linux_deployment([
+            evidence / "relocated-install/bin/steamworkz-smoke",
+            evidence / "relocated-install/bin/steamworkz-example-client",
+            evidence / "relocated-install/bin/steamworkz-example-lobby",
+            evidence / "relocated-install/bin/steamworkz-example-messages",
+            evidence / "consumer-install/bin/steamworkz-consumer",
+            evidence / "consumer-install/bin/steamworkz-no-debug",
+        ], sdk, evidence, run, env)
     if args.run_consumer:
         # main.zig is maintained as a pure value-only entry point. Its retained
         # native-backed exports are deliberately uncalled; review them before use.
@@ -256,7 +353,7 @@ def main():
     summary = {"package_hash": package_hash, "archive": str(archive), "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                "members": sorted(package), "source_sha256": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())},
                "runtime_sha256": hashlib.sha256(runtime).hexdigest(), "installed_runtime_copies_match": 2,
-               "pure_consumer_executed": args.run_consumer, "host": platform.platform(), "zig": version}
+               "linux_deployment_artifacts_checked": linux_checked, "pure_consumer_executed": args.run_consumer, "host": platform.platform(), "zig": version}
     (evidence / "audit.json").write_text(json.dumps(summary, indent=2) + "\n")
     print("PASS: source, fetched archive, relocated tests/install, independent hash consumer and runtime bytes")
     print("PASS: installed pure consumer" if args.run_consumer else "NOT RUN: installed pure consumer")

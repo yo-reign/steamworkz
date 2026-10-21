@@ -1,3 +1,6 @@
+//! Read-only streaming-session queries plus explicit Together UI/invitations.
+//! Sessions may disappear between queries; these identities own no resources.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamRemotePlay
 const std = @import("std");
 const builtin = @import("builtin");
 const Context = @import("Context.zig");
@@ -42,12 +45,15 @@ pub fn sessionAt(self: RemotePlay, index: usize) !Session {
     return @enumFromInt(session);
 }
 
+/// ISteamRemotePlay::BSessionRemotePlayTogether, not a connection-liveness test.
 pub fn isTogether(self: RemotePlay, session: Session) !bool {
     self.lease.check();
     try validSession(session);
     return boolean(native.sw_remote_play_together(@intFromEnum(session)));
 }
 
+/// ISteamRemotePlay::GetSessionSteamID; preserves native identities, including
+/// .invalid. The returned user ID needs no teardown and proves no lasting session.
 pub fn steamId(self: RemotePlay, session: Session) !SteamId {
     self.lease.check();
     try validSession(session);
@@ -91,6 +97,8 @@ pub fn clientName(self: RemotePlay, session: Session, output: []u8) !ClientName 
     }
 }
 
+/// ISteamRemotePlay::GetSessionClientFormFactor; preserves unknown native values.
+/// A device category is not a guarantee of resolution or input capabilities.
 pub fn formFactor(self: RemotePlay, session: Session) !FormFactor {
     self.lease.check();
     try validSession(session);
@@ -110,12 +118,14 @@ pub fn resolution(self: RemotePlay, session: Session) !Resolution {
     return .{ .available = available, .width = width, .height = height };
 }
 
-/// Explicit UI action. False preserves native rejection/configuration ambiguity.
+/// ISteamRemotePlay::ShowRemotePlayTogetherUI is an explicit UI action.
+/// False preserves native rejection/configuration ambiguity.
 pub fn showTogetherUi(self: RemotePlay) !bool {
     self.lease.check();
     return boolean(native.sw_remote_play_show_together_ui());
 }
 
+/// ISteamRemotePlay::BSendRemotePlayTogetherInvite; explicit invitation only.
 /// True means submission, not acceptance or a connected session. False retains
 /// rejection/configuration ambiguity. Only the explicit guest target sends zero.
 pub fn invite(self: RemotePlay, target: InviteTarget) !bool {

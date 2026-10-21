@@ -1,6 +1,23 @@
 //! Steamworkz: game-facing Steamworks 1.65 bindings for Zig 0.16.0.
 //! Public game callers use Zig only; the package privately compiles its C++ bridge.
 //! The SDK is external and consumer-supplied. See the README for setup and ownership.
+//!
+//! Start with Client: keep its storage stable, acquire borrowed service facades,
+//! then pump and poll events on its owner thread. Request.take correlates async
+//! completions; successful retrieval still requires checking the operation result.
+//! Release owned messages, queries and other service resources as documented
+//! before Client.deinit. Copy borrowed text before another Steam call or pump.
+//!
+//! Service navigation (Valve interfaces):
+//! - Friends / Apps / Stats / Cloud: ISteamFriends / ISteamApps /
+//!   ISteamUserStats / ISteamRemoteStorage; Friends image reads use ISteamUtils.
+//! - Lobbies: ISteamMatchmaking; Networking: ISteamNetworkingSockets, with
+//!   relay support, NetworkingConfig and NetworkingDebug via ISteamNetworkingUtils.
+//! - Utils / Input: ISteamUtils / ISteamInput; Voice and Client auth: ISteamUser.
+//! - RemotePlay / Timeline / Workshop / Screenshots: ISteamRemotePlay /
+//!   ISteamTimeline / ISteamUGC / ISteamScreenshots.
+//! See https://partner.steamgames.com/doc/api for Valve's interface reference;
+//! the external SDK 1.65 headers define the version this package targets.
 
 pub const Client = @import("Client.zig");
 pub const Networking = @import("Networking.zig");

@@ -57,7 +57,7 @@ This evidence predates extraction and new features. Revalidate changed contracts
 | PKG-01 | Extract the owned package into its own local Git repository | Original source retained, source provenance recorded, no SDK or generated output copied | accepted |
 | PKG-02 | Rename package, module, examples, current docs, and consumer recipe to Steamworkz | Real consumer uses `@import("steamworkz")`; no obsolete first-party branding | accepted |
 | PKG-03 | Require an external user-supplied SDK | Missing SDK produces an actionable error; explicit SDK overrides environment; no automatic SDK download | accepted |
-| PKG-04 | Publish immutable source and migrate the game | URL/hash dependency works from a fresh cache without vendored source; default game stays SDK-free | initial publication and remote consumer passed; game migration pending |
+| PKG-04 | Publish immutable source and migrate the game | URL/hash dependency works from a fresh cache without vendored source; default game stays SDK-free | accepted and published through M4; game consumes immutable ef3a395 |
 | PKG-05 | Audit source-package contents | Manifest/archive exclude SDK, runtime binaries, caches, private reports, credentials, and machine-specific paths | accepted; repeat at each publication |
 | PKG-06 | Document installation, lifecycle, migration, and release limits | Public recipes describe only accepted behavior and distinguish development App ID from shipping policy | accepted for bootstrap; expand with each API stage |
 
@@ -165,7 +165,7 @@ The actual 65-member package passed source/archive checks, relocated tests, cons
 The parent inspected 173 retained artifacts. Twenty consumers retained required production imports, and 117 fixture/guard artifacts had no Steam dependency.
 Three fresh read-only reviews found no current issue in content ownership, capability lifecycles or distribution.
 The parent confirmed all 68 reviewed source inputs and SDK270 remained unchanged, then accepted M4 source on 2026-10-20.
-Final document-inclusive package, indexed-source and remote-consumer checks remain publication gates. Native-service readiness remains separate.
+Final document-inclusive publication and immutable-consumer checks subsequently passed for `ef3a395`; the game consumes that published revision. Native-service readiness remains separate.
 Workshop's initial raw ZLS protocol was overwritten during its final rerun. The final clean protocol is retained; the earlier retention loss remains disclosed.
 No new live-action authority follows from planning or the approved API scope.
 
@@ -180,25 +180,50 @@ No new live-action authority follows from planning or the approved API scope.
 This is bounded game-facing coverage, not a commitment to mirror every method in each SDK interface.
 Workshop publishing/modification, unrestricted file loading, audio mixing, and gameplay replication are not included.
 
+### DX — Approved usability and robustness follow-up
+
+The user approved this bounded batch on 2026-10-21 after source/SDK/wrapper research
+and ZLS/native-Linux probes. Keep the existing flat-export bridge, explicit
+ownership and caller syntax. All seven items are source-accepted. The user
+subsequently authorized commits and normal pushes to both repositories after
+fresh offline build/run checks; no live Steam actions or game dependency repin
+are authorized. See [CHECKPOINT.md](CHECKPOINT.md) for validation counts,
+publication boundaries and the disclosed ZLS method-navigation trade-off.
+
+| ID | Work | Acceptance |
+| --- | --- | --- |
+| DX-01 | Declaration-local documentation and Valve crosswalk | Accurate hover-level ownership, results, cleanup and native API references; no semantic changes in the documentation lane |
+| DX-02 | Navigable request completion types | Existing Request/take callers retain behavior and resolve completion fields through ZLS; no new async framework |
+| DX-03 | Tested editor setup | Document SDK configuration separately from optional dependency enablement; no machine paths or local editor overrides committed |
+| DX-04 | Focused learning examples and current status docs | Compile-checked startup, lobby and message recipes never auto-run; historical readiness limits remain explicit |
+| DX-05 | Linux build/deployment consistency | Consumer uses the supported linker; owned artifacts retain explicit runtime lookup without embedding SDK paths; negative deployment controls |
+| DX-06 | Initialization/ticket failure coverage | Inert private fixtures prove rollback, diagnostics, recipient forwarding and cancellation, including negative controls |
+| DX-07 | Private schema consistency | Compile-time leaderboard status/capacity agreement; unknown values still preserved; no generated bindings |
+
 ## Integration and release gates
 
 | ID | Gate | Required evidence | Current state |
 | --- | --- | --- | --- |
-| LIVE-01 | Local networking | Actual listen/connect/accept and closure, reliable/unreliable traffic, multi-message batches, bounded failures | pending; bounded App 480 authority |
+| LIVE-01 | Local networking | Actual listen/connect/accept and closure, reliable/unreliable traffic, multi-message batches, bounded failures | M4 legacy socket-pair/poll-group smoke passed on macOS arm64; broader listen/peer/failure and M2-tool scenarios remain open |
 | LIVE-02 | Real P2P/relay | Two consenting test accounts/machines, failures, disconnect/reconnect, and transport diagnostics | blocked: accounts/machines |
 | LIVE-03 | Multi-client lobbies | Join/search, metadata propagation, chat, membership changes, and owner departure | blocked: accounts/machines |
-| LIVE-04 | Authentication | Ticket readiness/cancel locally; peer validation/revocation and backend verification separately | local pending; peer/backend blocked |
+| LIVE-04 | Authentication | Ticket readiness/cancel locally; peer validation/revocation and backend verification separately | M4 local ticket readiness/cancel submission passed on macOS arm64; peer/backend blocked |
 | LIVE-05 | Persistent stats/cloud | Configured test app, store outcomes, save round trips, failure cases, cache reload, and cleanup | blocked: app setup and write approval |
 | LIVE-06 | Input/overlay/handheld | Physical controllers, actual overlay/keyboard behavior, suspend/resume, and relevant handheld tests | blocked: hardware/session setup |
 | LIVE-07 | New service integration | Workshop download, voice device, Remote Play, screenshots, and recording checks with explicit side-effect approval | blocked: setup/approval |
-| PLATFORM-01 | Compile/link matrix | Four supported targets, all relevant modules/examples/fixtures/consumer, no target execution claims | passed through M4; repeat affected scope after changes |
-| PLATFORM-02 | Native runtime matrix | Execute offline tests and installed consumer on Windows/Linux/Intel macOS in addition to arm64 macOS | blocked: hosts |
-| PLATFORM-03 | Full game builds/runtime | Preserve SDK-free game and validate enabled game on supported deployment hosts | native pending; other hosts blocked |
+| PLATFORM-01 | Compile/link matrix | Four supported targets, all relevant modules/examples/fixtures/consumer, no target execution claims | DX changed-scope ReleaseFast matrix passed for macOS arm64/x86_64, Windows x86_64 GNU and Linux x86_64 GNU; 52/52 steps each; foreign execution remains untested |
+| PLATFORM-02 | Native runtime matrix | Execute offline tests and installed consumer on Windows/Linux/Intel macOS in addition to arm64 macOS | DX Linux offline graphs passed in all four modes; fresh Debug/ReleaseFast pure consumers ran without Steam initialization; smoke/tutorials remain compile/install/loader-only; Windows/Intel macOS execution remains unestablished |
+| PLATFORM-03 | Full game builds/runtime | Preserve SDK-free game and validate enabled game on supported deployment hosts | Historical macOS arm64/Arch matrices passed; fresh pre-publication Debug/ReleaseFast SDK-free game runs rendered three frames and enabled offline tests passed; enabled graphics still refer to the earlier pre-RUNPATH-fix run; other runtime gates remain open |
 | PERF-01 | Performance | Measured event, send/receive, allocation, and frame-time costs under representative workloads | pending; no current benchmark claim |
-| REVIEW-01 | Independent acceptance | Fresh read-only review of exact integrated source, ABI, ownership, tests, package and game migration | library through M4 passed; game migration review pending |
+| REVIEW-01 | Independent acceptance | Fresh read-only review of exact integrated source, ABI, ownership, tests, package and game migration | Historical M4/migration and Linux fix reviewed; four DX risk reviews and the final integration-delta review complete; parent verified source identity; one documented nonblocking ZLS regression remains |
 | RELEASE-01 | Production readiness record | Exact source revision, successful gates, known limits, and remaining app-specific obligations | pending |
 
-Authorized live checks use App ID 480 only: read-only queries, local socket traffic, temporary private lobbies with departure, and ticket issue/cancellation.
+The completed game migration and historical runtime evidence are recorded in the
+[game migration record](https://github.com/yo-reign/meikyuu-zig/blob/3137046a5d0019d0274544371f43a552dcf03ef3/docs/steamworkz-migration.md)
+and [Arch checkpoint](https://github.com/yo-reign/meikyuu-zig/blob/3137046a5d0019d0274544371f43a552dcf03ef3/docs/arch-linux-validation.md).
+They do not validate changes made after those revisions.
+
+Historical live authority covered App ID 480 only: read-only queries, local socket traffic, temporary private lobbies with departure, and ticket issue/cancellation. The current DX batch is offline-only.
 Do not purchase, publish content, invite other users, persist stats/cloud writes, change account settings, or log ticket bytes.
 Do not run multiple live clients in parallel on this machine.
 New live scenarios need specific authority even when their API implementation is approved.

@@ -1,8 +1,15 @@
 const std = @import("std");
 
+/// CSteamID identity shared by users, lobbies and game servers; not a resource owner.
+/// Zero is invalid. Copying an ID neither joins a lobby nor transfers membership.
 pub const SteamId = enum(u64) { invalid = 0, _ };
+/// AppId_t application identity; this value does not select or initialize an app.
 pub const AppId = enum(u32) { invalid = 0, spacewar = 480, _ };
+/// SteamAPICall_t correlation handle. Zero means native rejection; a nonzero
+/// handle does not prove completion or operation success and has no cancel method.
 pub const ApiCall = enum(u64) { invalid = 0, _ };
+/// HAuthTicket identity. The issuing client must cancel each accepted ticket
+/// with Client.cancelTicket; copying this value does not transfer that duty.
 pub const AuthTicket = enum(u32) { invalid = 0, _ };
 /// Remote Play session identity. Zero denotes an absent or invalid session.
 pub const RemotePlaySession = enum(u32) { invalid = 0, _ };
@@ -17,7 +24,10 @@ pub const ImageHandle = enum(i32) { invalid = 0, _ };
 /// Session-scoped leaderboard identity, not a downloaded entry-set owner.
 pub const Leaderboard = enum(u64) { invalid = 0, _ };
 
+/// Owned copy of a LeaderboardEntry_t row and its bounded detail values.
+/// No native entry-set handle or native-memory teardown is exposed.
 pub const LeaderboardEntry = struct {
+    /// Detail storage capacity, checked against the private bridge schema.
     pub const max_details = 64;
     user: SteamId = .invalid,
     global_rank: i32 = 0,
@@ -35,9 +45,14 @@ pub const LeaderboardEntry = struct {
 
 /// Owned completion-time prefix. No SDK entry-set handle escapes the dispatcher.
 /// The fixed row bound increases Event storage but avoids callback allocations.
+/// Captured for LeaderboardScoresDownloaded_t after ISteamUserStats download calls.
+/// Successful request retrieval does not imply complete row capture: inspect
+/// `status` and `all_rows_accessed`. This copy requires no native release.
+/// https://partner.steamgames.com/doc/api/ISteamUserStats#LeaderboardScoresDownloaded_t
 pub const LeaderboardEntries = struct {
     /// Wrapper policy, not a general SDK download limit.
     pub const max_entries = 100;
+    /// Wrapper capture outcome, not EResult. Unknown numeric statuses survive decoding.
     pub const Status = enum(i32) {
         complete = 0,
         invalid_count = 1,
@@ -66,6 +81,7 @@ pub const LeaderboardEntries = struct {
     }
 };
 
+/// Native EResult operation outcome, distinct from wrapper/retrieval errors.
 /// Unknown Steam result values remain representable after an SDK update.
 pub const Result = enum(i32) {
     none = 0,

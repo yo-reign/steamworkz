@@ -2,6 +2,7 @@
 //! Construction makes no native calls. Simulation is explicit, process-global
 //! opt-in, not a connection-local feature. Reset before closing the client and
 //! inspect every outcome. There is no automatic rollback or shutdown reset.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamNetworkingUtils
 const std = @import("std");
 const Context = @import("Context.zig");
 const Networking = @import("Networking.zig");
@@ -57,6 +58,9 @@ pub const GetResult = struct {
     outcome: GetOutcome,
 };
 
+/// ISteamNetworkingUtils::SetConfigValue installs an Int32 override at scope.
+/// Units are in the option name; native false becomes OperationFailed. Separate
+/// calls are not atomic and this facade does not restore previous overrides.
 pub fn set(self: NetworkingConfig, scope: Scope, option: Int32Option, value: i32) Error!void {
     self.lease.check();
     return setWith(c, scope, option, value, false);
@@ -66,6 +70,8 @@ pub fn clear(self: NetworkingConfig, scope: Scope, option: Int32Option) Error!vo
     self.lease.check();
     return setWith(c, scope, option, 0, true);
 }
+/// ISteamNetworkingUtils::GetConfigValue. Inspect outcome for a value versus an
+/// inherited value or native failure; a returned GetResult alone is not success.
 pub fn get(self: NetworkingConfig, scope: Scope, option: Int32Option) Error!GetResult {
     self.lease.check();
     return getWith(c, scope, option);

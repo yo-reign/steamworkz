@@ -21,15 +21,23 @@ zig build test-platform-guards -Dsdk="$STEAMWORKS_SDK"
 zig build test-capabilities test-voice test-remote-play test-timeline test-workshop test-screenshots -Dsdk="$STEAMWORKS_SDK"
 zig build test-capability-guards -Dsdk="$STEAMWORKS_SDK"
 zig build test-consumer -Dsdk="$STEAMWORKS_SDK"
+zig build examples -Dsdk="$STEAMWORKS_SDK" # compile/install only; never execute
 zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast
 ```
 
 - `test` runs the normal Zig suite (including deterministic properties), thirteen
   native fixtures, lifecycle runner self-tests, five original fatal checks,
   networking/platform/capability guards, and the consumer install/negative probes.
+  It also compiles/links the client, lobby and message tutorials without running
+  them. `examples` installs these programs/runtime; `test-compile` includes their
+  compile/link gate for cross-target checks. No offline step launches a tutorial.
   The normal suite deliberately skips eight fatal bodies. The separate lifecycle
   control repeats the passing lifecycle test (and the root discovery test).
-- `test-core` exercises 1771 bounded acquired-callback cases, including correlated
+- `test-core` first checks inert initialization admission, diagnostic copying,
+  exactly-once rollback/dispatch ordering and optional ticket-recipient forwarding.
+  Owning Client tests additionally verify reset diagnostics, admission ownership,
+  borrowed ticket prefixes and cancellation of malformed accepted ticket lengths.
+  It also exercises 1771 bounded acquired-callback cases, including correlated
   secondary capture, Workshop completion retrieval and owned callback arrays.
   Tests invalidate native storage before checking the owned copies. Native enum
   fixtures use initialized official objects and representable unnamed values.
@@ -81,8 +89,8 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
   repeated, consumed, pending, poisoned and capacity/exhaustion paths are covered.
   Client owns the current Context, not a captured old generation. Fake native
   calls, aborting stubs and ordinary errors cannot satisfy the expected panic.
-- `test-consumer` builds a separate dependency project with the consumer's default
-  compiler/linker selection; it does not run its executable or recurse into
+- `test-consumer` builds a separate dependency project using LLVM/LLD on Linux
+  (other platforms retain default selection); it does not run its executable or recurse into
   dependency tests. Target, CPU model/features, optimization and explicit SDK
   propagate. Uncalled initialization/shutdown/networking/platform/capability
   exports retain real production paths, including reachable ownership transitions,
@@ -90,6 +98,10 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
   application recipes and must remain unexecuted. A second no-capture consumer
   forces the real C++ registration symbol to survive dead stripping, which checks
   the required Zig sink without starting capture. Both consumers are install-only.
+  Linux Steam-linked artifacts disable automatic per-library RPATHs, preserving
+  the explicit `$ORIGIN` path. Consumers with other nonstandard dynamic libraries
+  must supply their own explicit deployment paths, as in the published recipe.
+  Cached offline runs still receive process-local lookup through `configureRun`.
   Positive code checks typed handles, unknown values, address round-trip and
   request completion semantics. `check-negative` in that project expects
   `Request(.overlay)` to fail with `This event does not complete an exposed
@@ -120,7 +132,10 @@ behavior also require separate device/app setup and side-effect authority.
 ## Optional maintainer source/package check
 
 Python **3.9+ standard library only**, Git, Zig 0.16.0 and the external SDK are
-required. Python is never invoked by ordinary Zig build/test/consumer steps.
+required. On Linux, deployment checks additionally require a native x86_64 glibc
+host and binutils `readelf` on PATH. They invoke the ELF interpreter's `--list`
+mode with its cache disabled, not the application entry point or library
+initializers. Python is never invoked by ordinary Zig build/test/consumer steps.
 Inspect `tests/consumer/main.zig` before opting into execution: its main uses only
 pure value APIs; all retained native-backed exports must remain uncalled.
 
@@ -154,6 +169,13 @@ retained on failure, mode 0700, with private files. Do not publish it. The check
    archive URL and the **computed Zig package hash**, with another fresh cache.
    Only the in-package consumer fixture uses a sibling path dependency.
 6. Compares both generated installed runtimes byte-for-byte with the supplied SDK.
+   On Linux, checks smoke, the three tutorials and both consumers with `readelf`: `libsteam_api.so`
+   must remain a dependency and `$ORIGIN` must be the only RUNPATH/RPATH entry.
+   Loader-only checks must resolve the adjacent runtime both installed and in a
+   fresh relocated copy. Another executable-only copy must fail specifically for
+   missing `libsteam_api.so`. SDK inputs and original installs are never moved or
+   hidden. Loader checks remove all `LD_*` overrides and disable the loader cache;
+   a globally installed Steam runtime that masks the missing copy fails the check.
    With `--run-consumer`, runs only the pure installed consumer from an unrelated
    cwd, removing SDK/runtime search overrides; this separately tests adjacent
    runtime loading. It never runs the smoke executable.
@@ -162,7 +184,24 @@ retained on failure, mode 0700, with private files. Do not publish it. The check
 and test output; `audit.json` records source SHA-256s, archive SHA-256, actual Zig
 hash, members, runtime hash, host/version and whether pure execution occurred.
 Checker self-controls exercise valid archives, missing/duplicate/changed/unexpected
-members, links/traversal, unsafe names and content signatures.
+members, links/traversal, unsafe names and content signatures, plus missing Steam
+linkage, path-qualified dependencies, leaked/empty search paths and invalid ELF
+interpreter metadata. Nonzero loader status in a `*-missing.log` is the expected
+negative control, not a failed build.
+
+For a focused Linux deployment check of existing trusted owned install prefixes
+(no builds, archive audit, or application execution):
+
+```sh
+python3 tests/offline/check.py --sdk "$STEAMWORKS_SDK" \
+  --evidence "$PRIVATE_EVIDENCE/new-deployment-run" \
+  --linux-install "$SMOKE_PREFIX" --linux-install "$CONSUMER_PREFIX"
+```
+
+Each prefix must contain at least one of the installed smoke/tutorial/consumer executables
+under `bin`. The same source allowlist audit still runs; `deployment.json` records
+source hashes and checked artifacts. Use separate Debug and ReleaseFast installs.
+Do not use this focused mode as a substitute for the full source/package check.
 
 Limits: this is a bounded audit of trusted owned source, **not** a general archive
 sandbox, arbitrary-code sandbox, comprehensive credential scanner or proof of

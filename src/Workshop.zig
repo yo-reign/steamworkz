@@ -1,6 +1,7 @@
 //! Borrowed owner-thread Workshop access. No automatic queries or downloads.
 //! One query per session is wrapper policy. Query copies share Context ownership;
 //! acquire, install cleanup, then send. Pending queries cannot be cancelled here.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamUGC
 const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
@@ -89,9 +90,12 @@ pub const Query = struct {
         if (self.token == 0 or ctx.workshop_active != self.token) return error.StaleQuery;
         return ctx;
     }
+    /// Wrapper lifecycle updated by Client dispatch, not a native status query.
     pub fn state(self: Query) Error!QueryState {
         return (try self.context()).workshop_state;
     }
+    /// Borrowed identity for correlation, not an ownership transfer. Release the
+    /// Query owner, never attempt cleanup through a completion's bare handle.
     pub fn handle(self: Query) Error!types.WorkshopQuery {
         return @enumFromInt((try self.context()).workshop_handle);
     }
@@ -100,6 +104,10 @@ pub const Query = struct {
         const ctx = try self.context();
         return if (ctx.workshop_state == .ready) ctx.workshop_returned else null;
     }
+    /// ISteamUGC::SendQueryUGCRequest. Pump/poll Client even if the Request is
+    /// discarded, so query ownership can leave pending. Take SteamUGCQueryCompleted_t
+    /// (workshop_query_completed), check result == .ok, then read ready rows and
+    /// release. Successful retrieval does not imply every Details.result is .ok.
     pub fn send(self: Query) Error!requests.Request(.workshop_query_completed) {
         const ctx = try self.context();
         if (ctx.workshop_state != .created) return error.QueryAlreadySent;
@@ -142,6 +150,7 @@ pub const Query = struct {
     }
 };
 
+/// ISteamUGC::CreateQueryUGCDetailsRequest creates an unsent Query owner.
 /// 1..50 is a wrapper bound, not Steam's native limit. IDs retain input order,
 /// duplicates and invalid identities for native per-item result reporting.
 pub fn createDetailsQuery(self: Workshop, items: []const types.WorkshopItem) Error!Query {
@@ -165,8 +174,9 @@ pub fn createDetailsQuery(self: Workshop, items: []const types.WorkshopItem) Err
     return .{ .lease = self.lease, .token = ctx.workshop_active };
 }
 
-/// Parent must call after decoding EVERY owned event, before returning/discarding
-/// it. No pumping or session acquisition. A matching terminal failure is final.
+/// Internal Client-only dispatch hook: called after decoding EVERY owned event,
+/// before returning/discarding it. Gameplay code must not invoke it to fabricate
+/// readiness. No pumping/session acquisition; a matching terminal failure is final.
 pub fn observeCompletion(lease: Context.Lease, event: *const events.Event) void {
     lease.check();
     const ctx = lease.context;
@@ -183,7 +193,7 @@ pub fn observeCompletion(lease: Context.Lease, event: *const events.Event) void 
     }
 }
 
-/// Parent-only final escape before native shutdown and Context release. One
+/// Internal Client-only final escape before native shutdown and Context release. One
 /// best-effort release for created/ready/failed, none for pending/release_failed.
 /// Clears wrapper ownership; does not claim cancellation or successful cleanup.
 pub fn shutdown(lease: Context.Lease) void {
@@ -243,7 +253,8 @@ pub fn installInfo(self: Workshop, item: types.WorkshopItem, path: []u8) Error!I
     return .{ .found = found, .size = size, .timestamp = timestamp, .path = if (found) path[0..length] else null };
 }
 pub const DownloadProgress = struct { found: bool, downloaded: u64, total: u64 };
-/// Zero total does not imply completion; counts are preserved even on false.
+/// ISteamUGC::GetItemDownloadInfo; downloaded/total are bytes. Zero total does
+/// not imply completion; counts are preserved even on false.
 pub fn downloadProgress(self: Workshop, item: types.WorkshopItem) Error!DownloadProgress {
     self.lease.check();
     var value: DownloadProgress = .{ .found = false, .downloaded = 0, .total = 0 };
@@ -251,8 +262,9 @@ pub fn downloadProgress(self: Workshop, item: types.WorkshopItem) Error!Download
     return value;
 }
 pub const DownloadOptions = struct { high_priority: bool = false };
-/// Explicit submission only. True means wait for workshop_downloaded
-/// (DownloadItemResult); stop using existing item files until then. That event
+/// ISteamUGC::DownloadItem explicitly starts a download. True means wait for
+/// workshop_downloaded (DownloadItemResult_t) and inspect result; stop using
+/// existing item files until then. That event
 /// identifies app/item, NOT a unique request. False priority is wrapper policy.
 pub fn downloadItem(self: Workshop, item: types.WorkshopItem, options: DownloadOptions) Error!bool {
     self.lease.check();

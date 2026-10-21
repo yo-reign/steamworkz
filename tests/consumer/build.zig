@@ -21,8 +21,11 @@ pub fn build(b: *std.Build) void {
         !module.resolved_target.?.result.cpu.features.eql(target.result.cpu.features))
         @panic("Steamworkz dependency did not preserve consumer build options");
 
-    // Use default compiler/linker selection, like an independent consuming game.
+    // Match the Linux game recipe, including CRT support in LLVM/LLD.
+    const use_llvm: ?bool = if (target.result.os.tag == .linux) true else null;
     const exe = b.addExecutable(.{
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
         .name = "steamworkz-consumer",
         .root_module = b.createModule(.{
             .root_source_file = b.path("main.zig"),
@@ -30,14 +33,18 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    if (target.result.os.tag == .linux) exe.each_lib_rpath = false;
     exe.root_module.addImport("steamworkz", module);
     b.installArtifact(exe);
     steamworkz_build.installRuntime(b, target.result, sdk);
 
     const no_debug = b.addExecutable(.{
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
         .name = "steamworkz-no-debug",
         .root_module = b.createModule(.{ .root_source_file = b.path("no_debug.zig"), .target = target, .optimize = optimize }),
     });
+    if (target.result.os.tag == .linux) no_debug.each_lib_rpath = false;
     no_debug.root_module.addImport("steamworkz", module);
     // Prevent dead stripping from concealing a missing required callback sink.
     // This does not call the function or require any game to start capture.
@@ -50,9 +57,12 @@ pub fn build(b: *std.Build) void {
         .{ .source = "invalid_image.zig", .diagnostic = "error: expected type 'types.ImageHandle', found 'comptime_int'" },
     }) |probe| {
         const invalid = b.addExecutable(.{
+            .use_llvm = use_llvm,
+            .use_lld = use_llvm,
             .name = probe.source,
             .root_module = b.createModule(.{ .root_source_file = b.path(probe.source), .target = target, .optimize = optimize }),
         });
+        if (target.result.os.tag == .linux) invalid.each_lib_rpath = false;
         // Executable compilation avoids COFF's multiple-object build-obj limit.
         // These probes have exported functions but no runnable entry point.
         invalid.entry = .disabled;

@@ -28,7 +28,8 @@ pub fn build(b: *std.Build) void {
     module.addOptions("steamworkz_test_options", normal_options);
 
     const tests = b.addTest(.{ .name = "steamworkz-tests", .root_module = module, .use_llvm = use_llvm, .use_lld = use_llvm });
-    const compile_tests = b.step("test-compile", "Compile and link all offline tests without running them");
+    configureLinkedArtifact(tests, target.result);
+    const compile_tests = b.step("test-compile", "Compile and link offline tests and tutorial examples without running them");
     compile_tests.dependOn(&tests.step);
     const run_tests = b.addRunArtifact(tests);
     configureRun(b, run_tests, target.result, sdk_path);
@@ -59,6 +60,7 @@ pub fn build(b: *std.Build) void {
         options.addOption(bool, "fatal_lifecycle", true);
         fatal_module.addOptions("steamworkz_test_options", options);
         const fatal = b.addTest(.{ .name = b.fmt("fatal-{s}", .{name}), .root_module = fatal_module, .filters = &.{b.fmt("lifecycle fatal {s}", .{name})}, .use_llvm = use_llvm, .use_lld = use_llvm });
+        configureLinkedArtifact(fatal, target.result);
         compile_tests.dependOn(&fatal.step);
         // The runner launches these directly, without the build test-server protocol.
         const check = b.addRunArtifact(runner);
@@ -71,11 +73,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(addPlatformGuards(b, target, optimize, runner, compile_tests));
     test_step.dependOn(addCapabilityGuards(b, target, optimize, runner, compile_tests));
     const control = b.addTest(.{ .name = "lifecycle-control", .root_module = module, .filters = &.{"lifecycle control "}, .use_llvm = use_llvm, .use_lld = use_llvm });
+    configureLinkedArtifact(control, target.result);
     const control_run = b.addRunArtifact(control);
     configureRun(b, control_run, target.result, sdk_path);
     lifecycle.dependOn(&control_run.step);
     compile_tests.dependOn(&control.step);
     const properties = b.addTest(.{ .name = "properties", .root_module = module, .filters = &.{"property "}, .use_llvm = use_llvm, .use_lld = use_llvm });
+    configureLinkedArtifact(properties, target.result);
     const properties_run = b.addRunArtifact(properties);
     configureRun(b, properties_run, target.result, sdk_path);
     b.step("test-properties", "Run deterministic bounded Zig properties").dependOn(&properties_run.step);
@@ -89,6 +93,7 @@ pub fn build(b: *std.Build) void {
         .use_llvm = use_llvm,
         .use_lld = use_llvm,
     });
+    configureLinkedArtifact(networking_tests, target.result);
     const networking_run = b.addRunArtifact(networking_tests);
     configureRun(b, networking_run, target.result, sdk_path);
     b.step("test-networking-tools", "Run offline networking tooling and traffic-control Zig tests").dependOn(&networking_run.step);
@@ -102,6 +107,7 @@ pub fn build(b: *std.Build) void {
         .use_llvm = use_llvm,
         .use_lld = use_llvm,
     });
+    configureLinkedArtifact(platform_tests, target.result);
     const platform_run = b.addRunArtifact(platform_tests);
     configureRun(b, platform_run, target.result, sdk_path);
     b.step("test-platform-tools", "Run offline platform, cloud, Input and progression Zig tests").dependOn(&platform_run.step);
@@ -115,6 +121,7 @@ pub fn build(b: *std.Build) void {
         .use_llvm = use_llvm,
         .use_lld = use_llvm,
     });
+    configureLinkedArtifact(capability_tests, target.result);
     const capability_run = b.addRunArtifact(capability_tests);
     configureRun(b, capability_run, target.result, sdk_path);
     b.step("test-capabilities", "Run offline content, voice, Remote Play and recording Zig tests").dependOn(&capability_run.step);
@@ -156,6 +163,7 @@ pub fn build(b: *std.Build) void {
             .use_llvm = use_llvm,
             .use_lld = use_llvm,
         });
+        if (fixture.sdk_link) configureLinkedArtifact(executable, target.result);
         compile_tests.dependOn(&executable.step);
         const run = b.addRunArtifact(executable);
         configureRun(b, run, target.result, sdk_path);
@@ -163,9 +171,34 @@ pub fn build(b: *std.Build) void {
         b.step(b.fmt("test-{s}", .{fixture.name}), b.fmt("Run offline {s} native fixtures", .{fixture.name})).dependOn(&run.step);
     }
 
+    const examples_step = b.step("examples", "Compile and install focused examples without running them");
+    for ([_][]const u8{ "client", "lobby", "messages" }) |name| {
+        const example_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("examples/{s}.zig", .{name})),
+            .target = target,
+            .optimize = optimize,
+        });
+        example_module.addImport("steamworkz", module);
+        const example = b.addExecutable(.{
+            .name = b.fmt("steamworkz-example-{s}", .{name}),
+            .root_module = example_module,
+            .use_llvm = use_llvm,
+            .use_lld = use_llvm,
+        });
+        configureLinkedArtifact(example, target.result);
+        // Tutorials initialize Steam if launched: offline steps only compile/link.
+        test_step.dependOn(&example.step);
+        compile_tests.dependOn(&example.step);
+        const install = b.addInstallArtifact(example, .{});
+        examples_step.dependOn(&install.step);
+    }
+    const example_runtime = b.addInstallFileWithDir(.{ .cwd_relative = b.pathJoin(&.{ runtime.directory, runtime.filename }) }, .bin, runtime.filename);
+    examples_step.dependOn(&example_runtime.step);
+
     const smoke_module = b.createModule(.{ .root_source_file = b.path("examples/smoke.zig"), .target = target, .optimize = optimize });
     smoke_module.addImport("steamworkz", module);
     const smoke = b.addExecutable(.{ .name = "steamworkz-smoke", .root_module = smoke_module, .use_llvm = use_llvm, .use_lld = use_llvm });
+    configureLinkedArtifact(smoke, target.result);
     b.installArtifact(smoke);
     installRuntime(b, target.result, sdk_path);
     const live_run = b.addRunArtifact(smoke);
@@ -423,6 +456,11 @@ fn runtimeLibrary(b: *std.Build, target: std.Target, sdk: []const u8) Runtime {
 fn configureIncludes(b: *std.Build, module: *std.Build.Module, sdk: []const u8) void {
     module.addIncludePath(b.path("c"));
     module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "public" }) });
+}
+
+// Preserve explicit deployment paths without leaking link-time SDK directories.
+fn configureLinkedArtifact(artifact: *std.Build.Step.Compile, target: std.Target) void {
+    if (target.os.tag == .linux) artifact.each_lib_rpath = false;
 }
 
 fn configureModule(b: *std.Build, module: *std.Build.Module, sdk: []const u8, runtime: Runtime) void {

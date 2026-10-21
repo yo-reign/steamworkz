@@ -8,9 +8,93 @@ Track source completion separately from platform, device, account, backend, and 
 
 Full scope and acceptance criteria: [ROADMAP.md](ROADMAP.md).
 
-## Authority and boundaries
+## Current DX batch — 2026-10-21
 
-Recorded 2026-10-19.
+The user approved all seven [DX follow-up items](ROADMAP.md#dx--approved-usability-and-robustness-follow-up)
+as a bounded implementation batch after reviewing the research proposal:
+declaration-local docs, navigable request results, editor setup, focused examples,
+Linux build/deployment consistency, initialization/ticket failure tests, and
+compile-time private-schema checks. Individual diff approval is waived only
+inside this scope. Parent integration and independent acceptance remain required.
+
+**Current state: DX source accepted; publication authorized.**
+The user additionally authorized fixing existing bugs/issues uncovered during
+this work without further patch-approval pauses. Reproduced defects repaired here
+include the packed Input-enum reference and ReleaseSafe POSIX-header translation
+failures. A Windows DLL-import constant-expression error in the new private
+initialization adapter was also corrected before the final matrix.
+After source acceptance, the user authorized committing and normally pushing the
+accepted changes to both repositories, with fresh build/run checks first. The
+user selected offline checks only. No game dependency repin or live Steam action
+is authorized. The game keeps its immutable published dependency; only its
+companion editor README changes. SDK inputs stay external and read-only.
+
+All four isolated component owners delivered handoffs and released their lanes.
+The parent integrated the components, examples and shared docs, and remains the
+sole writer. Four independent, read-only reviews covered request/schema/editor
+behavior, native lifecycle and regression fixes, build/deployment/examples, and
+API documentation. A final narrow review of the Windows adapter, checker cleanup
+and status evidence found no issues. These were source/evidence reviews, not
+independent test executions; the parent verified frozen/current source hashes.
+Exact hashes, worktrees, attempted checks, failed controls and protocols remain
+in the private coordinator record, not the source package.
+Do not start another writer without recovering current ownership first.
+
+### Integrated DX evidence
+
+| Gate | Observed result |
+| --- | --- |
+| Native Linux Debug, ReleaseSafe, ReleaseFast, ReleaseSmall | `test test-compile install examples`: 691/691 steps in each mode; 135/143 reported passes comprise 133 ordinary Zig tests and two repeated controls, with eight intentional fatal-body skips; native fixtures and fatal-guard groups also pass |
+| Independent native consumers | Install/link and two negative API probes: 10/10 steps in each mode; consumer applications not executed |
+| Cross compile/link/install | ReleaseFast macOS arm64/x86_64, Windows x86_64 GNU and Linux x86_64 GNU: 52/52 steps each; foreign targets not executed |
+| Linux deployment | Six executables per native mode: smoke, three tutorials and two consumers; Steam linkage, `$ORIGIN`, identical adjacent runtime bytes, relocation success and missing-runtime failure checked without executing application code |
+| Actual source package | 71 owned source inputs, 68 archive/package members; fetched-archive equality, relocated tests/install and independent hash-consumer checks passed; no consumer application execution |
+| Configured editor checks | Zig/ZLS 0.16.0: SDK availability alone leaves the game dependency disabled; explicit enablement resolves the integrated module and completion fields; 23 changed Zig documents have explicit empty diagnostics |
+| Configured native diagnostics | Exact-source clangd production and fixture probes for `core.cpp` and `input.cpp` have explicit empty diagnostics; an automatic probe lacking SDK headers is retained separately, not counted as clean |
+| Checker quality | Ordinary and optimized Python negative controls and Ruff pass; inherited checker warnings were repaired without relaxing checks |
+| Preservation | All 270 SDK files, the original SDK archive, 65 immutable cached dependency files, game code/build/pin, repository HEADs and empty indexes remain unchanged |
+
+The Linux consumer now uses LLVM/LLD; owned linked artifacts disable automatic
+SDK RPATHs while retaining explicit adjacent-runtime lookup. Input copies packed
+enum bits without an aligned reference. The POSIX declaration import disables
+fortified inline wrappers only inside Linux `@cImport`; native C/C++ hardening
+and release-active lifecycle guards remain intact. Windows adapter calls stay
+statically resolved and use the same official SDK entry points.
+
+**Known nonblocking editor trade-off:** unchanged Request callers now resolve
+`created.result`, `created.lobby` and `entered.lobby`, but ZLS 0.16.0 still gives
+an overbroad generic hover and regresses `take` method go-to-definition to null.
+Independent review confirmed the regression. Bounded static mapping and alias
+experiments did not restore both behaviors; callers retain their syntax and
+semantics, and direct `src/requests.zig` navigation remains the documented fallback.
+This is not claimed as complete generic-editor support.
+
+During the implementation/acceptance checks above, no smoke, tutorial, game,
+installed consumer or Steam-service scenario was run. Offline fixtures/guards
+were executed; tutorial entry points were compiled and installed only.
+
+### Authorized pre-publication offline recheck
+
+The subsequent build/run request was explicitly limited to offline checks:
+
+- Library Debug and ReleaseFast graphs passed again: 691/691 steps per mode,
+  with the same test-count and intentional-skip meanings recorded above.
+- Independent consumers built with their negative probes: 10/10 steps per mode.
+  The inspected, value-only consumer main executed and exited successfully in
+  both modes; its retained native-backed exports were not called.
+- The SDK-free game passed 49/49 tests and 11/11 build steps in each mode, then
+  rendered three frames and shut down normally in both Debug and ReleaseFast.
+- The Steam-enabled game passed 62/62 offline tests and 15/15 build steps in
+  each mode. Its executable was not launched. It still consumes the immutable
+  M4 pin, not the newly accepted sibling library source.
+
+No Steam initialization, live smoke, tutorial, account/service action or
+persistent stats/cloud write was performed in this recheck. Native non-Linux,
+device, backend, multi-account and performance gates remain separate.
+
+## Historical M0–M4 authority and boundaries
+
+Recorded 2026-10-19; this is not blanket authority for later work.
 
 - The user approved the complete staged scope in ROADMAP.md and waived individual diff approval within that scope.
 - The user authorized subagent implementation with parent integration and acceptance.
@@ -49,24 +133,38 @@ Recorded 2026-10-19.
 - A fresh M3 URL/hash consumer passed build/install, negative probes, production linkage and runtime-byte checks without application execution.
 - All five M4 component writers delivered handoffs and ended checkout ownership. Parent source, frozen-input, SDK and retained-artifact inspection is complete.
 - Shared M4 integration, aggregate matrices, package/linkage checks and three independent reviews passed. The parent accepted M4 source on 2026-10-20.
-- Final document-inclusive publication checks and the immutable game pin remain separate next gates.
+- Accepted M4 was published as `ef3a395f1050372c285d6588f797b6c4d056bd6e`; its verified package hash is `steamworkz-0.1.0-y1J174YfEAAPq4ubpOlR7aUQIlgx3e01lnMsMKrFlVoN`.
+- The actual 65-member archive and fresh immutable consumer passed publication checks. The game migrated to that pin without vendoring or a sibling dependency.
+- The main-based game port was published on branch `steamworkz` at `555d3c62166a767f0c084194e97b04d25819bb8f`; the later Linux build fix and validation record are published through `3137046a5d0019d0274544371f43a552dcf03ef3`.
+- Library README guidance was subsequently published at `e494f4176540d842dc28d101f9ac5fc7959f4476`, the baseline for the DX batch. Its publication revision is recorded by Git history; local validation archive hashes are not new game dependency pins.
 - Acceptance and publication do not establish native-service or performance readiness.
-- Game implementation remains unchanged at the extraction baseline. Its README and a new migration record are uncommitted.
 - Extraction hashes and private execution logs stay outside the published repositories.
 
 ## Stage state
 
 | Stage | State | Next gate |
 | --- | --- | --- |
-| M0: extraction/naming/external SDK | accepted | Focused checks, independent review, corrected evidence wording, active diagnostics, and source audit passed |
-| M1: permanent tests | accepted source | Integrated checks, independent reviews and source/archive audit passed; CI execution and non-host runtime remain separate gates |
+| M0: extraction/naming/external SDK | accepted and published | Focused checks, independent review, corrected evidence wording, active diagnostics, and source audit passed |
+| M1: permanent tests | accepted and published | Integrated checks, independent reviews and source/archive audit passed; CI execution and non-host runtime remain separate gates |
 | M2: networking tools | accepted and published | Final source/index/archive and immutable-consumer gates passed; live/platform/performance readiness remains separate |
 | M3: platform/saves/input/progression | accepted and published | Integrated gates, reviews/correction and final source/index/archive/immutable-consumer checks passed |
-| M4: content/voice/Remote Play/capture | accepted source | Integration, full matrices, package/linkage checks and three independent reviews passed; final publication checks remain |
-| Remote package and game migration | partially verified | M0 through M3 immutable URL/hash consumers build; game migration and final feature revision remain pending |
-| Final acceptance/release record | pending | Integrated review, validation matrix, explicit residual release gates |
+| M4: content/voice/Remote Play/capture | accepted and published | Integration, matrices, package/linkage, reviews and immutable publication/consumer gates passed for ef3a395 |
+| Remote package and game migration | accepted and published | Game consumes ef3a395; macOS/Arch game matrices and bounded graphical checks have separate records; optional-service/other-host gates remain |
+| DX: usability and robustness follow-up | accepted; publication authorized | Seven items, regression fixes, matrices, deployment, editor/package audits, reviews and fresh offline build/run checks complete; documented ZLS trade-off remains; normal publication authorized, repin/live actions not authorized |
+| Final acceptance/release record | pending | App-specific live, device, multi-account/backend and performance gates remain open |
 
-## Implementation topology and lane board
+See the game's [migration record](https://github.com/yo-reign/meikyuu-zig/blob/3137046a5d0019d0274544371f43a552dcf03ef3/docs/steamworkz-migration.md)
+and [Arch validation](https://github.com/yo-reign/meikyuu-zig/blob/3137046a5d0019d0274544371f43a552dcf03ef3/docs/arch-linux-validation.md)
+for post-extraction evidence. Published M4's existing headless smoke passed on
+macOS arm64 in Debug/ReleaseFast (local socket pairs, one private lobby and ticket
+readiness/cancel submission). Arch's enabled game initialized and rendered three
+frames before its RUNPATH-only fix; post-fix checks were offline/loader-only.
+Neither result validates the new DX batch or optional native services.
+
+## Historical implementation topology and lane board
+
+The following M0–M4 records preserve their original sequence. A statement that a
+gate was pending describes that historical point, not the current stage table.
 
 The overall delivery is multi-seam. Tests, networking, platform services, content services, and the consumer integration have distinct contracts.
 Do not assign the complete delivery to one writer.
@@ -361,7 +459,7 @@ Do not silently replace a failed subagent with another execution protocol.
 | M3 source acceptance | Corrected 52-file candidate, 2026-10-20 | All reports read and corrected hashes checked; no native/device/performance readiness claim |
 | M3 publication | Commit `24fcb967`, tree `e1d35b79343ada9284a9214cfdaf7ed098712c4c` | Exact 29-path delta, 52 indexed/Git archive sources and 49 package members matched; normal push and remote equality passed |
 | M3 immutable consumer | Actual package and fresh Debug URL/hash dependency | Build/install, negative probes, native imports/sinks and runtime-byte checks passed; no consumer or smoke execution |
-| Game dependency migration | Remote URL/hash | Source migration and final feature revision remain pending; game changes stay uncommitted |
+| Game dependency migration | Published ef3a395 URL/hash and subsequent game records | Migration completed; main-based port published on steamworkz and later Arch results recorded through 3137046; game dependency remains immutable |
 
 ## Tooling observations
 
@@ -396,11 +494,11 @@ No alternate CLI agent or new authority was used.
 
 ## Recovery and next action
 
-1. Inspect Git status in both repositories and read this file plus ROADMAP.md.
-2. Recover active runs from the supervisor mission record before launching another writer.
-3. Recover the completed combined reviews, ownership-repair review and temporary-path follow-up review. Their frozen inventories and execution evidence are retained; the final runner is integrated.
-4. Preserve the distinction between 55 normal passes, five skips, repeated controls and intentional fatal checks. M1 adds no new Steam session or non-host runtime evidence.
-5. Recover the completed M1 publication and actual immutable-consumer evidence. Repeat document-inclusive archive and staged-tree checks at each later publication; never overwrite intervening remote work.
-6. Recover M2 component, integration, review/fix and publication records. M2 source is accepted and integrated; verify publication receipts rather than inferring a push from source acceptance. Continue the pending M3–M4 stages with explicit component ownership and separate release gates.
-7. Fetch a real immutable library URL/hash before removing the game's vendored source.
-8. Do not claim the project is production-validated while required account/hardware/platform gates remain blocked.
+1. Inspect Git status in both repositories and read the current stage/authority sections above plus ROADMAP.md.
+2. Recover the current DX mission, lane ownership, component handoffs and private evidence before launching another writer. M0–M4 extraction/publication is already complete.
+3. Integrate only approved component files after their owners finish. Preserve SDK inputs, recovery worktrees, failed attempts and the game's immutable dependency.
+4. Complete the pending offline/native-Linux, request-navigation, example and private-fixture gates against the exact integrated source; do not substitute historical matrices for changed-scope checks.
+5. Keep normal test passes, deliberate fatal-body skips, repeated controls, compilation-only examples and actual execution distinct. No current live action or CI dispatch is authorized.
+6. Obtain the fresh integrated review and document-inclusive source/archive audit before accepting the batch. Generated runtime copies belong only in external build outputs.
+7. New commits/pushes and a future immutable game repin require separate approval. Never invent a package hash, use a mutable branch URL or overwrite remote work.
+8. Preserve the historical evidence ledger and remaining device/account/backend/performance limits. Source acceptance is not production certification.

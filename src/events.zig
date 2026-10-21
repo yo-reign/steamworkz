@@ -9,13 +9,77 @@ const SteamId = types.SteamId;
 const AppId = types.AppId;
 const Result = types.Result;
 
+/// LobbyEnter_t entry outcome, distinct from API-call retrieval errors.
 pub const LobbyEnterResponse = enum(u32) { success = 1, does_not_exist = 2, not_allowed = 3, full = 4, failed = 5, banned = 6, _ };
+/// ValidateAuthTicketResponse_t outcome; unknown native values remain representable.
 pub const AuthResponse = enum(i32) { ok = 0, user_offline = 1, no_license = 2, vac_banned = 3, logged_in_elsewhere = 4, vac_timeout = 5, cancelled = 6, already_used = 7, invalid = 8, publisher_banned = 9, network_identity_failure = 10, _ };
 /// All payload data belongs to this value, not to Steam's callback storage.
 /// `call == .invalid` means an ordinary broadcast, not an API-call result.
 /// A lobby operation can produce both a correlated result and a broadcast.
 pub const Event = struct {
+    /// Owned LobbyCreated_t completion from ISteamMatchmaking::CreateLobby.
+    /// Successful retrieval is not creation success: inspect `result` first.
+    /// Successful membership must eventually be left with Lobbies.leave.
+    /// https://partner.steamgames.com/doc/api/ISteamMatchmaking#LobbyCreated_t
+    pub const LobbyCreated = struct {
+        /// Created lobby identity; use only after `result == .ok`.
+        lobby: SteamId,
+        /// Native operation result, including unknown numeric values.
+        result: Result,
+    };
+
+    /// Owned LobbyEnter_t result/broadcast from ISteamMatchmaking::JoinLobby
+    /// (also broadcast after creation). Inspect `response`, not just retrieval.
+    /// Successful membership must eventually be left with Lobbies.leave.
+    /// https://partner.steamgames.com/doc/api/ISteamMatchmaking#LobbyEnter_t
+    pub const LobbyEntered = struct {
+        lobby: SteamId,
+        /// Native entry outcome, including unknown numeric values.
+        response: LobbyEnterResponse,
+        locked: bool,
+    };
+
+    /// Owned UserStatsReceived_t metadata from ISteamUserStats::RequestUserStats.
+    /// Check `result` before reading cached stats; this value owns no stats cache.
+    /// https://partner.steamgames.com/doc/api/ISteamUserStats#UserStatsReceived_t
+    pub const StatsReceived = struct { game: u64, user: SteamId, result: Result };
+
+    /// Owned LeaderboardFindResult_t from ISteamUserStats::FindLeaderboard.
+    /// `found` determines whether the session-scoped identity can be used.
+    /// https://partner.steamgames.com/doc/api/ISteamUserStats#LeaderboardFindResult_t
+    pub const LeaderboardFound = struct { leaderboard: types.Leaderboard, found: bool };
+
+    /// Owned LeaderboardScoreUploaded_t from ISteamUserStats::UploadLeaderboardScore.
+    /// Inspect `success`; `changed` alone does not establish operation success.
+    /// https://partner.steamgames.com/doc/api/ISteamUserStats#LeaderboardScoreUploaded_t
+    pub const LeaderboardUploaded = struct { leaderboard: types.Leaderboard, success: bool, score: i32, changed: bool, rank_new: i32, rank_previous: i32 };
+
+    /// Owned GlobalAchievementPercentagesReady_t from
+    /// ISteamUserStats::RequestGlobalAchievementPercentages. Check `result`
+    /// before reading the native cache; this metadata requires no teardown.
+    /// https://partner.steamgames.com/doc/api/ISteamUserStats#GlobalAchievementPercentagesReady_t
+    pub const GlobalPercentagesReady = struct { game: u64, result: Result };
+
+    /// Owned SteamUGCQueryCompleted_t metadata from ISteamUGC::SendQueryUGCRequest.
+    /// Check `result`. Rows remain owned by Workshop.Query, which must be released
+    /// after completion; copying this metadata does not release the query.
+    /// https://partner.steamgames.com/doc/api/ISteamUGC#SteamUGCQueryCompleted_t
+    pub const WorkshopQueryCompleted = struct {
+        query: types.WorkshopQuery,
+        result: Result,
+        returned: u32,
+        total: u32,
+        cached: bool,
+        cursor: [256]u8,
+        /// Borrows this metadata's bounded cursor bytes, not native storage.
+        pub fn cursorText(self: *const @This()) []const u8 {
+            return types.text(&self.cursor);
+        }
+    };
+
+    /// Correlation only; invalid for ordinary broadcasts. No cancellation ownership.
     call: types.ApiCall,
+    /// Original Steam callback identifier, retained even for unhandled payloads.
     callback_id: i32,
     payload: union(enum) {
         unhandled,
@@ -40,8 +104,9 @@ pub const Event = struct {
         },
         lobby_join_requested: struct { lobby: SteamId, user: SteamId },
         lobby_invite: struct { lobby: SteamId, user: SteamId, game: u64 },
-        lobby_created: struct { lobby: SteamId, result: Result },
-        lobby_entered: struct { lobby: SteamId, response: LobbyEnterResponse, locked: bool },
+        lobby_created: LobbyCreated,
+        lobby_entered: LobbyEntered,
+        /// LobbyMatchList_t count; copy lobby IDs from the shared search cache promptly.
         lobby_list: u32,
         lobby_data: struct { lobby: SteamId, member: SteamId, success: bool },
         lobby_members: struct { lobby: SteamId, member: SteamId, actor: SteamId, changes: u32 },
@@ -61,7 +126,7 @@ pub const Event = struct {
         auth_ticket: struct { ticket: types.AuthTicket, result: Result },
         web_ticket: struct { ticket: types.AuthTicket, result: Result, size: u32, bytes: [2560]u8 },
         auth_validated: struct { user: SteamId, owner: SteamId, response: AuthResponse },
-        stats_received: struct { game: u64, user: SteamId, result: Result },
+        stats_received: StatsReceived,
         stats_stored: struct { game: u64, result: Result },
         achievement_stored: struct {
             game: u64,
@@ -74,6 +139,7 @@ pub const Event = struct {
                 return types.text(&self.name);
             }
         },
+        /// RemoteStorageFileWriteAsyncComplete_t operation result, not retrieval status.
         cloud_written: Result,
         /// Steam evicted this user's stats; request them again before reading.
         stats_unloaded: SteamId,
@@ -87,10 +153,10 @@ pub const Event = struct {
                 return types.text(&self.name);
             }
         },
-        leaderboard_found: struct { leaderboard: types.Leaderboard, found: bool },
+        leaderboard_found: LeaderboardFound,
         leaderboard_entries: types.LeaderboardEntries,
-        leaderboard_uploaded: struct { leaderboard: types.Leaderboard, success: bool, score: i32, changed: bool, rank_new: i32, rank_previous: i32 },
-        global_percentages_ready: struct { game: u64, result: Result },
+        leaderboard_uploaded: LeaderboardUploaded,
+        global_percentages_ready: GlobalPercentagesReady,
         gamepad_dismissed: struct { app: AppId, submitted: bool, matched: bool, capture: Utils.GamepadText },
         floating_dismissed,
         resumed,
@@ -99,17 +165,7 @@ pub const Event = struct {
         input_connected: Input.Controller,
         input_disconnected: Input.Controller,
         /// Completion metadata only. Rows remain owned by Workshop.Query until release.
-        workshop_query_completed: struct {
-            query: types.WorkshopQuery,
-            result: Result,
-            returned: u32,
-            total: u32,
-            cached: bool,
-            cursor: [256]u8,
-            pub fn cursorText(self: *const @This()) []const u8 {
-                return types.text(&self.cursor);
-            }
-        },
+        workshop_query_completed: WorkshopQueryCompleted,
         workshop_item_installed: struct { app: AppId, item: types.WorkshopItem, legacy_content: u64, manifest: u64 },
         /// Broadcast result, not a uniquely correlated download request.
         workshop_downloaded: struct { app: AppId, item: types.WorkshopItem, result: Result },
@@ -256,6 +312,31 @@ test "platform events own keyboard bytes and preserve unmatched metadata" {
     inline for (.{ .{ c.SW_FLOATING_DISMISSED, .floating_dismissed }, .{ c.SW_RESUMED, .resumed }, .{ c.SW_CLOUD_CHANGED, .cloud_changed } }) |pair| {
         raw.kind = pair[0];
         try std.testing.expectEqual(pair[1], std.meta.activeTag(decode(&raw).payload));
+    }
+}
+
+// Numeric decoding and bounded copies require agreement with our private C schema.
+comptime {
+    if (types.LeaderboardEntries.max_entries != c.SW_LEADERBOARD_MAX_ENTRIES)
+        @compileError("leaderboard row capacity differs from the C bridge schema");
+    if (types.LeaderboardEntry.max_details != c.SW_LEADERBOARD_MAX_DETAILS)
+        @compileError("leaderboard detail capacity differs from the C bridge schema");
+    const Status = types.LeaderboardEntries.Status;
+    const statuses = .{
+        .{ Status.complete, c.SW_LEADERBOARD_CAPTURE_COMPLETE },
+        .{ Status.invalid_count, c.SW_LEADERBOARD_CAPTURE_INVALID_COUNT },
+        .{ Status.too_many_rows, c.SW_LEADERBOARD_CAPTURE_TOO_MANY_ROWS },
+        .{ Status.invalid_handle, c.SW_LEADERBOARD_CAPTURE_INVALID_HANDLE },
+        .{ Status.unavailable, c.SW_LEADERBOARD_CAPTURE_UNAVAILABLE },
+        .{ Status.entry_failed, c.SW_LEADERBOARD_CAPTURE_ENTRY_FAILED },
+        .{ Status.invalid_details, c.SW_LEADERBOARD_CAPTURE_INVALID_DETAILS },
+        .{ Status.untracked, c.SW_LEADERBOARD_CAPTURE_UNTRACKED },
+    };
+    if (@typeInfo(Status).@"enum".fields.len != statuses.len)
+        @compileError("leaderboard capture status schema check is incomplete");
+    for (statuses) |pair| {
+        if (@intFromEnum(pair[0]) != pair[1])
+            @compileError("leaderboard capture status differs from the C bridge schema: " ++ @tagName(pair[0]));
     }
 }
 

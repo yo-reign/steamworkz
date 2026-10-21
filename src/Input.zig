@@ -2,6 +2,7 @@
 //! Explicitly start, then runFrame before action reads, then pump/drain Client.
 //! Stop before client close; the Client teardown hook makes only a best-effort
 //! final attempt. Handles identify SDK objects, not owned resources.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamInput
 const std = @import("std");
 const Context = @import("Context.zig");
 const c = @cImport({
@@ -87,7 +88,9 @@ pub const GlyphStyle = struct {
     }
 };
 
-/// Always uses native Init(true). Rejection poisons this session; no retry.
+/// ISteamInput::Init(true) enables explicit manual runFrame updates. If requested,
+/// EnableDeviceCallbacks adds device events to Client dispatch. Rejection poisons
+/// this session; no retry. An action manifest/game configuration is still required.
 pub fn start(self: Input, options: StartOptions) Error!StartOutcome {
     self.lease.check();
     switch (self.lease.context.input_state) {
@@ -127,6 +130,8 @@ pub fn shutdown(lease: Context.Lease) void {
     }
     lease.context.input_state = .inactive;
 }
+/// ISteamInput::RunFrame with SDK 1.65's reserved true argument. Call once per
+/// game frame before reading actions; Client.runFrame does not update Input.
 pub fn runFrame(self: Input) Error!void {
     try self.checkActive();
     try status(native.sw_input_frame());
@@ -152,15 +157,21 @@ pub fn connectedControllers(self: Input, destination: []Controller) Error![]Cont
     try status(native.sw_input_controllers(&values, values.len, &count));
     return publish(Controller, destination, &values, count);
 }
+/// ISteamInput::GetActionSetHandle by manifest name. Preserves .invalid on a miss;
+/// this identity owns no resource and needs no teardown.
 pub fn actionSet(self: Input, name: [:0]const u8) Error!ActionSet {
     return @enumFromInt(try self.lookup(0, name));
 }
+/// ISteamInput::GetDigitalActionHandle by manifest name; .invalid is preserved.
 pub fn digitalAction(self: Input, name: [:0]const u8) Error!DigitalAction {
     return @enumFromInt(try self.lookup(1, name));
 }
+/// ISteamInput::GetAnalogActionHandle by manifest name; .invalid is preserved.
 pub fn analogAction(self: Input, name: [:0]const u8) Error!AnalogAction {
     return @enumFromInt(try self.lookup(2, name));
 }
+/// ISteamInput::ActivateActionSet selects actions for subsequent reads. Void
+/// forwarding does not prove the controller or action set is usable.
 pub fn activateActionSet(self: Input, controller: Controller, action_set: ActionSet) Error!void {
     try self.activate(0, controller, action_set);
 }
@@ -186,12 +197,16 @@ pub fn activeLayers(self: Input, controller: Controller, destination: []ActionSe
     try status(native.sw_input_layers(@intFromEnum(controller), &values, values.len, &count));
     return publish(ActionSet, destination, &values, count);
 }
+/// ISteamInput::GetDigitalActionData after runFrame. Check active before state;
+/// an inactive action is not equivalent to an active, released button.
 pub fn digitalData(self: Input, controller: Controller, action: DigitalAction) Error!DigitalData {
     try self.checkActive();
     var data: c.struct_sw_input_digital = undefined;
     try status(native.sw_input_digital_data(@intFromEnum(controller), @intFromEnum(action), &data));
     return .{ .state = data.state, .active = data.active };
 }
+/// ISteamInput::GetAnalogActionData after runFrame. Check active and mode before
+/// interpreting x/y; mouse deltas need not lie within joystick [-1, 1] bounds.
 pub fn analogData(self: Input, controller: Controller, action: AnalogAction) Error!AnalogData {
     try self.checkActive();
     var data: c.struct_sw_input_analog = undefined;
@@ -229,11 +244,15 @@ pub fn glyphPNG(self: Input, origin: Origin, size: GlyphSize, style: GlyphStyle,
     if (n < 0 or n > 2) return error.InvalidArgument;
     return text(0, 0, @intFromEnum(origin), n, try style.bits(), destination);
 }
+/// ISteamInput::GetGlyphSVGForActionOrigin; copied path borrows destination.
+/// Like glyphPNG, excludes NUL, never truncates, and does not load the image.
 pub fn glyphSVG(self: Input, origin: Origin, style: GlyphStyle, destination: []u8) Error![]const u8 {
     try self.checkActive();
     try validOrigin(origin);
     return text(1, 0, @intFromEnum(origin), 0, try style.bits(), destination);
 }
+/// ISteamInput::GetStringForActionOrigin; localized text copied into destination,
+/// excluding NUL. NullText and InsufficientStorage are errors, not empty names.
 pub fn originName(self: Input, origin: Origin, destination: []u8) Error![]const u8 {
     try self.checkActive();
     try validOrigin(origin);

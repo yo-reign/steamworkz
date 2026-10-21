@@ -1,3 +1,10 @@
+//! Stable-address owner of one process-wide Steam session and its manual dispatcher.
+//! Allocate storage explicitly (stack or allocator), initialize in place, and do not
+//! copy or move the live Client. Borrowed service facades use the owner thread and
+//! expire at deinit; accessors do not start optional services or allocate storage.
+//! Native mapping: https://partner.steamgames.com/doc/sdk/api and
+//! https://partner.steamgames.com/doc/api/ISteamUser (SDK 1.65).
+
 const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
@@ -20,34 +27,57 @@ const Client = @This();
 context: Context,
 pipe: i32,
 
+/// InitEx failure categories plus wrapper admission failures: AlreadyInitialized
+/// means another Client owns the process; MissingInterface means native init
+/// succeeded but a mandatory interface or pipe was absent and was rolled back.
 pub const InitError = error{ AlreadyInitialized, InitializationFailed, SteamClientUnavailable, SteamVersionMismatch, MissingInterface };
+/// Caller-owned copy of the latest initialization diagnostic, independent of Client
+/// lifetime. Each init attempt clears it, including AlreadyInitialized failures.
+/// Text may be empty on failure; branch on InitError, not message presence.
 pub const Diagnostic = struct {
     message: [c.SW_INIT_MESSAGE_SIZE]u8 = @splat(0),
+    /// Borrows this diagnostic's bytes up to the first NUL (or buffer end).
+    /// The slice expires when this storage is changed, reused for init, or freed.
     pub fn text(self: *const Diagnostic) []const u8 {
         return types.text(&self.message);
     }
 };
-pub const Ticket = struct { handle: types.AuthTicket, bytes: []const u8 };
+/// Locally accepted GetAuthSessionTicket result, not proof of readiness or auth.
+pub const Ticket = struct {
+    /// Cancel once with Client.cancelTicket when no longer needed, before deinit.
+    handle: types.AuthTicket,
+    /// Prefix borrowing the buffer passed to authSessionTicket; no allocation.
+    bytes: []const u8,
+};
+/// ISteamUser::BeginAuthSession / EBeginAuthSessionResult, including unknown values.
+/// Even .ok requires later ValidateAuthTicketResponse_t (auth_validated) handling.
 pub const BeginAuthResult = enum(i32) { ok = 0, invalid_ticket = 1, duplicate_request = 2, invalid_version = 3, wrong_game = 4, expired_ticket = 5, _ };
+/// ISteamUser::UserHasLicenseForApp / EUserHasLicenseForAppResult; unknown values
+/// are retained. This is peer ownership status, not a local entitlement query.
 pub const License = enum(i32) { has_license = 0, no_license = 1, not_authenticated = 2, _ };
 
+/// SteamAPI_InitEx, required-interface/pipe validation, then ManualDispatch_Init.
 /// Owns the process-wide Steam session. Keep this value at its original address.
 /// Call every method on the initializing thread. Do not mix another Steam wrapper
-/// or SteamAPI_RunCallbacks with this manual-dispatch client.
+/// or SteamAPI_RunCallbacks with this manual-dispatch client. These owner checks
+/// remain active in release builds. On error no new session is acquired; inspect
+/// diagnostic for optional detail. Only a successfully initialized owner needs deinit.
 pub fn init(self: *Client, diagnostic: *Diagnostic) InitError!void {
-    try self.initialize(diagnostic, c.sw_init);
+    try self.initialize(diagnostic, c.sw_init, c.sw_pipe);
 }
 
-fn initialize(self: *Client, diagnostic: *Diagnostic, comptime native_init: @TypeOf(c.sw_init)) InitError!void {
+fn initialize(self: *Client, diagnostic: *Diagnostic, comptime native_init: @TypeOf(c.sw_init), comptime native_pipe: @TypeOf(c.sw_pipe)) InitError!void {
     diagnostic.* = .{};
     try self.context.claim();
     errdefer self.context.release();
     try initializationResult(native_init(&diagnostic.message));
-    self.pipe = c.sw_pipe();
+    self.pipe = native_pipe();
 }
 
-/// Release messages, close sockets/listeners/groups, leave lobbies, and end auth
-/// sessions first, and end any acquired cloud write batch. Pending results are
+/// SteamAPI_Shutdown after optional-service teardown; releases the process owner.
+/// Cancel issued auth tickets, release messages, close sockets/listeners/groups,
+/// leave lobbies, end auth sessions, and end any acquired cloud write batch first.
+/// Pending results are
 /// discarded, not delivered during shutdown. Optional teardown is best effort.
 /// Pending Workshop queries are not cancelled or drained here. Screenshot input
 /// borrowing does not end at session teardown. See Screenshots for retention rules.
@@ -71,19 +101,22 @@ fn deinitialize(self: *Client, comptime native_shutdown: @TypeOf(c.sw_shutdown))
     self.context.release();
 }
 
-/// Explicit shipping policy. Call before init and exit promptly when true.
+/// SteamAPI_RestartAppIfNecessary. Explicit shipping policy: call before init and
+/// exit promptly when true. This can relaunch the application through Steam.
 /// Development examples intentionally do not relaunch Steam or the game.
 pub fn restartIfNecessary(app: types.AppId) bool {
     if (app == .invalid) @panic("Steamworks restart requires a valid App ID");
     return c.sw_restart_if_necessary(@intFromEnum(app)) != 0;
 }
 
-/// Call once per render frame, including title screens and paused simulation.
+/// SteamAPI_ManualDispatch_RunFrame for this session's pipe. Call once per render
+/// frame, including title screens and paused simulation; then drain nextEvent.
 pub fn runFrame(self: *const Client) void {
     self.context.check();
     c.sw_run_frame(self.pipe);
 }
 
+/// ManualDispatch_GetNextCallback/GetAPICallResult with FreeLastCallback.
 /// Drain after runFrame. Every event owns its payload, and the SDK callback is
 /// already freed when this returns. Unknown callbacks are explicit events.
 /// An empty drain also releases Steam's calling-thread parameter memory.
@@ -144,117 +177,139 @@ fn downloadAccessComplete(value: *const types.LeaderboardEntries) bool {
     };
 }
 
+/// ISteamUser::GetSteamID: local user identity, not proof of online connectivity.
 pub fn userId(self: *const Client) types.SteamId {
     self.context.check();
     return @enumFromInt(c.sw_user_id());
 }
+/// ISteamUtils::GetAppID: application ID of this initialized session.
 pub fn appId(self: *const Client) types.AppId {
     self.context.check();
     return @enumFromInt(c.sw_app_id());
 }
+/// ISteamUser::BLoggedOn: current Steam-server connectivity; not peer authentication.
 pub fn loggedOn(self: *const Client) bool {
     self.context.check();
     return c.sw_logged_on() != 0;
 }
+/// ISteamUtils::IsOverlayEnabled: overlay availability, not whether it is visible.
 pub fn overlayEnabled(self: *const Client) bool {
     self.context.check();
     return c.sw_overlay_enabled() != 0;
 }
+/// ISteamUtils::GetServerRealTime: server time in Unix seconds, not a monotonic clock.
 pub fn serverTime(self: *const Client) u32 {
     self.context.check();
     return c.sw_server_time();
 }
 
+/// Borrowed ISteamNetworkingSockets/ISteamNetworkingUtils facade; no socket is opened.
 pub fn networking(self: *Client) Networking {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. Construction does not query or change native settings.
+/// Borrowed ISteamNetworkingUtils configuration facade; no native settings change here.
 pub fn networkingConfig(self: *Client) NetworkingConfig {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. Call start explicitly to register diagnostic capture.
+/// Borrowed ISteamNetworkingUtils debug facade. Call start explicitly to capture.
 pub fn networkingDebug(self: *Client) NetworkingDebug.Capture {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. Keyboard/filter actions require explicit calls.
+/// Borrowed ISteamUtils facade. Keyboard/filter actions require explicit calls.
 pub fn utils(self: *Client) Utils {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. Explicitly start and update before action reads.
+/// Borrowed ISteamInput facade. Explicitly start and update before action reads.
 /// Client.runFrame does not update Input implicitly.
 pub fn input(self: *Client) Input {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. Recording and decoding require explicit calls.
+/// Borrowed ISteamUser voice facade. Recording and decoding require explicit calls.
 pub fn voice(self: *Client) Voice {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. No session query, UI action or invitation occurs here.
+/// Borrowed ISteamRemotePlay facade. No query, UI action or invitation occurs here.
 pub fn remotePlay(self: *Client) RemotePlay {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. No recording metadata is changed here.
+/// Borrowed ISteamTimeline facade. No recording metadata is changed here.
 pub fn timeline(self: *Client) Timeline {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. Queries and downloads require explicit calls.
+/// Borrowed ISteamUGC facade. Queries and downloads require explicit calls.
 pub fn workshop(self: *Client) Workshop {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
-/// Borrowed facade only. No screenshot or hook action occurs here.
+/// Borrowed ISteamScreenshots facade. No screenshot or hook action occurs here.
 pub fn screenshots(self: *Client) Screenshots {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
+/// Borrowed ISteamMatchmaking facade; no lobby is created, joined or searched here.
 pub fn lobbies(self: *Client) Lobbies {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
+/// Borrowed ISteamFriends facade for friends, presence and overlay actions.
 pub fn friends(self: *Client) services.Friends {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
+/// Borrowed ISteamApps facade for local app/DLC queries.
 pub fn apps(self: *Client) services.Apps {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
+/// Borrowed ISteamUserStats facade; no request, stat change or store occurs here.
 pub fn stats(self: *Client) services.Stats {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
+/// Borrowed ISteamRemoteStorage facade; no file or write batch is opened here.
 pub fn cloud(self: *Client) services.Cloud {
     self.context.check();
     return .{ .lease = self.context.lease() };
 }
 
-/// Bytes borrow caller storage. Wait for a matching successful auth_ticket event
+/// ISteamUser::GetAuthSessionTicket. Bytes borrow caller storage; no allocation.
+/// TicketRejected means no handle was accepted. An oversized native length cancels
+/// the accepted handle before returning InvalidNativeResult. This is not a Web API
+/// ticket (use webApiTicket for AuthenticateUserTicket).
+/// Wait for a matching successful auth_ticket (GetAuthSessionTicketResponse_t) event
 /// before transmitting them. Cancel the ticket when the connection ends.
 /// Bind the ticket to the receiving Steam user when its identity is known.
 pub fn authSessionTicket(self: *const Client, buffer: []u8, recipient: ?types.SteamId) !Ticket {
+    return self.authSessionTicketWith(buffer, recipient, c.sw_auth_ticket, c.sw_cancel_ticket);
+}
+
+fn authSessionTicketWith(self: *const Client, buffer: []u8, recipient: ?types.SteamId, comptime native_ticket: @TypeOf(c.sw_auth_ticket), comptime native_cancel: @TypeOf(c.sw_cancel_ticket)) !Ticket {
     if (buffer.len == 0) return error.BufferTooSmall;
     if (recipient == .invalid) return error.InvalidRecipient;
     const capacity = try types.count(buffer.len);
     self.context.check();
     var size: u32 = 0;
-    const handle = c.sw_auth_ticket(buffer.ptr, capacity, &size, if (recipient) |id| @intFromEnum(id) else 0);
+    const handle = native_ticket(buffer.ptr, capacity, &size, if (recipient) |id| @intFromEnum(id) else 0);
     if (handle == 0) return error.TicketRejected;
     if (size > buffer.len) {
-        c.sw_cancel_ticket(handle);
+        native_cancel(handle);
         return error.InvalidNativeResult;
     }
     return .{ .handle = @enumFromInt(handle), .bytes = buffer[0..size] };
 }
 
-/// Ticket bytes arrive in web_ticket. Keep publisher secrets on a trusted server.
+/// ISteamUser::GetAuthTicketForWebApi. Requires a nonempty, NUL-free service identity.
+/// A returned handle is acceptance only: inspect the matching web_ticket result
+/// (GetTicketForWebApiResponse_t) before using its owned bytes. Cancel the handle
+/// when no longer needed. Keep publisher secrets on a trusted server.
 pub fn webApiTicket(self: *const Client, identity: [:0]const u8) !types.AuthTicket {
     if (identity.len == 0 or std.mem.indexOfScalar(u8, identity, 0) != null) return error.InvalidIdentity;
     self.context.check();
@@ -262,11 +317,18 @@ pub fn webApiTicket(self: *const Client, identity: [:0]const u8) !types.AuthTick
     if (handle == 0) return error.TicketRejected;
     return @enumFromInt(handle);
 }
+/// ISteamUser::CancelAuthTicket for an issued session or Web API ticket. Invalid
+/// is a no-op; valid handles are forwarded on every call, not deduplicated. The
+/// caller must cancel each accepted handle once when finished, before deinit.
 pub fn cancelTicket(self: *const Client, ticket: types.AuthTicket) void {
-    self.context.check();
-    if (ticket != .invalid) c.sw_cancel_ticket(@intFromEnum(ticket));
+    self.cancelTicketWith(ticket, c.sw_cancel_ticket);
 }
-/// An immediate .ok is not final authentication. Observe auth_validated and
+
+fn cancelTicketWith(self: *const Client, ticket: types.AuthTicket, comptime native_cancel: @TypeOf(c.sw_cancel_ticket)) void {
+    self.context.check();
+    if (ticket != .invalid) native_cancel(@intFromEnum(ticket));
+}
+/// ISteamUser::BeginAuthSession. An immediate .ok is not final authentication. Observe auth_validated and
 /// later revocation events before granting or retaining application permissions.
 pub fn beginAuthSession(self: *const Client, user: types.SteamId, ticket: []const u8) !BeginAuthResult {
     if (user == .invalid or ticket.len == 0) return error.InvalidTicket;
@@ -274,11 +336,14 @@ pub fn beginAuthSession(self: *const Client, user: types.SteamId, ticket: []cons
     self.context.check();
     return @enumFromInt(c.sw_begin_auth(ticket.ptr, size, @intFromEnum(user)));
 }
+/// ISteamUser::EndAuthSession: stop tracking a peer when the session ends.
+/// Pair with an accepted beginAuthSession; this does not cancel your issued tickets.
 pub fn endAuthSession(self: *const Client, user: types.SteamId) void {
     self.context.check();
     c.sw_end_auth(@intFromEnum(user));
 }
-/// For an authenticated peer. Missing authentication is not an offline status.
+/// ISteamUser::UserHasLicenseForApp for an authenticated peer. Missing
+/// authentication is not an offline status.
 /// Use apps().owns(app) to query the local user's ownership instead.
 pub fn userLicense(self: *const Client, user: types.SteamId, app: types.AppId) License {
     self.context.check();
@@ -598,6 +663,9 @@ test "initialization errors preserve actionable SDK failure categories" {
 
 test "native initialization failure releases process ownership and keeps diagnostics" {
     const Failure = struct {
+        fn pipe() callconv(.c) i32 {
+            @panic("failed initialization must not query the pipe");
+        }
         fn init(message: [*c]u8) callconv(.c) i32 {
             const text = "fixture failure";
             @memcpy(message[0..text.len], text);
@@ -607,11 +675,139 @@ test "native initialization failure releases process ownership and keeps diagnos
     };
     var client: Client = undefined;
     var diagnostic: Diagnostic = .{};
-    try std.testing.expectError(error.SteamClientUnavailable, client.initialize(&diagnostic, Failure.init));
+    try std.testing.expectError(error.SteamClientUnavailable, client.initialize(&diagnostic, Failure.init, Failure.pipe));
     try std.testing.expectEqualStrings("fixture failure", diagnostic.text());
     var next: Context = undefined;
     try next.claim();
     defer next.release();
+}
+
+test "initialization resets diagnostics for native failures and duplicate admission" {
+    const Native = struct {
+        var calls: usize = 0;
+        fn init(message: [*c]u8) callconv(.c) i32 {
+            for (message[0..c.SW_INIT_MESSAGE_SIZE]) |byte| {
+                std.testing.expectEqual(@as(u8, 0), byte) catch @panic("diagnostic was not cleared");
+            }
+            calls += 1;
+            return 1; // Empty SDK diagnostic is still an initialization failure.
+        }
+        fn pipe() callconv(.c) i32 {
+            @panic("failure or duplicate admission must not query the pipe");
+        }
+    };
+    Native.calls = 0;
+    var client: Client = undefined;
+    var diagnostic: Diagnostic = .{ .message = @splat(0xa5) };
+    try std.testing.expectError(error.InitializationFailed, client.initialize(&diagnostic, Native.init, Native.pipe));
+    try std.testing.expectEqualStrings("", diagnostic.text());
+    try std.testing.expectEqual(@as(usize, 1), Native.calls);
+    var owner: Context = undefined;
+    try owner.claim(); // Failed initialization released the process claim.
+    defer owner.release();
+    diagnostic.message = @splat(0xa5);
+    try std.testing.expectError(error.AlreadyInitialized, client.initialize(&diagnostic, Native.init, Native.pipe));
+    try std.testing.expectEqualStrings("", diagnostic.text());
+    try std.testing.expectEqual(@as(usize, 1), Native.calls);
+    owner.check(); // Duplicate admission must not release the existing owner.
+}
+
+test "initialization queries the pipe only after native success with a live owner" {
+    const Native = struct {
+        var context: *Context = undefined;
+        var inits: usize = 0;
+        var pipes: usize = 0;
+        fn init(message: [*c]u8) callconv(.c) i32 {
+            context.check();
+            std.testing.expect(inits == 0 and pipes == 0) catch @panic("init order");
+            inits += 1;
+            @memcpy(message[0..2], "ok");
+            return 0;
+        }
+        fn pipe() callconv(.c) i32 {
+            context.check();
+            std.testing.expect(inits == 1 and pipes == 0) catch @panic("pipe order");
+            pipes += 1;
+            return 73;
+        }
+    };
+    var client: Client = undefined;
+    Native.context = &client.context;
+    Native.inits = 0;
+    Native.pipes = 0;
+    var diagnostic: Diagnostic = .{ .message = @splat(0xa5) };
+    try client.initialize(&diagnostic, Native.init, Native.pipe);
+    defer client.context.release(); // Synthetic native success; no Steam owner exists.
+    try std.testing.expectEqual(@as(usize, 1), Native.inits);
+    try std.testing.expectEqual(@as(usize, 1), Native.pipes);
+    try std.testing.expectEqual(@as(i32, 73), client.pipe);
+    try std.testing.expectEqualStrings("ok", diagnostic.text());
+}
+
+test "authSessionTicket forwards recipients and cancels malformed acceptance exactly once" {
+    const Native = struct {
+        var context: *Context = undefined;
+        var buffer: []u8 = undefined;
+        var recipient: u64 = 0;
+        var handle: u32 = 0;
+        var size: u32 = 0;
+        var calls: usize = 0;
+        var cancellations: usize = 0;
+        fn ticket(out: ?*anyopaque, capacity: i32, written: [*c]u32, identity: u64) callconv(.c) u32 {
+            context.check();
+            std.testing.expect(out == @as(?*anyopaque, @ptrCast(buffer.ptr)) and capacity == buffer.len and identity == recipient) catch @panic("ticket forwarding");
+            std.testing.expect(calls == 0 and cancellations == 0 and written[0] == 0) catch @panic("ticket order");
+            calls += 1;
+            written[0] = size;
+            return handle;
+        }
+        fn cancel(value: u32) callconv(.c) void {
+            context.check();
+            std.testing.expect(calls == 1 and cancellations == 0 and value == handle and handle != 0) catch @panic("ticket cancellation");
+            cancellations += 1;
+        }
+    };
+    var client: Client = undefined;
+    try claimTestClient(&client);
+    defer client.context.release();
+    Native.context = &client.context;
+    var buffer: [8]u8 = @splat(0x73);
+    Native.buffer = &buffer;
+    for ([_]?types.SteamId{ null, @enumFromInt(73) }) |recipient| {
+        for ([_]u32{ 0, 91 }) |handle| {
+            for ([_]u32{ 0, 1, buffer.len, buffer.len + 1, std.math.maxInt(u32) }) |size| {
+                Native.recipient = if (recipient) |id| @intFromEnum(id) else 0;
+                Native.handle = handle;
+                Native.size = size;
+                Native.calls = 0;
+                Native.cancellations = 0;
+                const result = client.authSessionTicketWith(&buffer, recipient, Native.ticket, Native.cancel);
+                if (handle == 0) {
+                    try std.testing.expectError(error.TicketRejected, result);
+                    try std.testing.expectEqual(@as(usize, 0), Native.cancellations);
+                } else if (size > buffer.len) {
+                    try std.testing.expectError(error.InvalidNativeResult, result);
+                    try std.testing.expectEqual(@as(usize, 1), Native.cancellations);
+                } else {
+                    const ticket = try result;
+                    try std.testing.expectEqual(handle, @intFromEnum(ticket.handle));
+                    try std.testing.expectEqual(size, ticket.bytes.len);
+                    try std.testing.expect(ticket.bytes.ptr == &buffer);
+                    try std.testing.expectEqual(@as(usize, 0), Native.cancellations);
+                    client.cancelTicketWith(ticket.handle, Native.cancel);
+                    try std.testing.expectEqual(@as(usize, 1), Native.cancellations);
+                }
+                try std.testing.expectEqual(@as(usize, 1), Native.calls);
+            }
+        }
+    }
+    Native.calls = 0;
+    Native.cancellations = 0;
+    try std.testing.expectError(error.BufferTooSmall, client.authSessionTicketWith(&.{}, null, Native.ticket, Native.cancel));
+    try std.testing.expectError(error.InvalidRecipient, client.authSessionTicketWith(&buffer, .invalid, Native.ticket, Native.cancel));
+    client.cancelTicketWith(.invalid, Native.cancel);
+    try std.testing.expectEqual(@as(usize, 0), Native.calls);
+    try std.testing.expectEqual(@as(usize, 0), Native.cancellations);
 }
 
 test "client shutdown disables diagnostics before native release" {

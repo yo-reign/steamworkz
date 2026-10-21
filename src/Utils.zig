@@ -1,3 +1,5 @@
+//! Explicit text entry, text filtering and hardware-default guidance.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamUtils
 const std = @import("std");
 const builtin = @import("builtin");
 const Context = @import("Context.zig");
@@ -55,6 +57,9 @@ pub const GamepadText = struct {
     }
 };
 
+/// ISteamUtils::ShowGamepadTextInput; max_characters counts characters, not bytes.
+/// GamepadTextInputDismissed_t becomes gamepad_dismissed with text copied during
+/// dispatch; inspect matched, submitted and capture.status before using text.
 /// Returns native acceptance, not completion. Both keyboards share one pending
 /// slot, released only by a matching dismissal event or Client teardown.
 pub fn showGamepad(self: Utils, options: GamepadOptions) !bool {
@@ -71,8 +76,10 @@ pub fn showGamepad(self: Utils, options: GamepadOptions) !bool {
     return accepted;
 }
 
-/// Coordinates are signed pixels relative to the game window; dimensions must
-/// be positive. Native OS key events supply the text, not a delayed text getter.
+/// ISteamUtils::ShowFloatingGamepadTextInput; FloatingGamepadTextInputDismissed_t
+/// becomes floating_dismissed. The rectangle describes the text field in signed
+/// window-relative pixels, with positive dimensions. Native OS key events supply
+/// the text, not a delayed text getter.
 pub fn showFloating(self: Utils, options: FloatingOptions) !bool {
     self.lease.check();
     if (self.lease.context.keyboard_state != .none) return error.KeyboardPending;
@@ -97,15 +104,17 @@ pub fn dismissFloating(self: Utils) !bool {
     return boolean(native.sw_utils_dismiss_floating());
 }
 
-/// Explicit dictionary initialization. False preserves native language
-/// unavailability: FilterText may still pass input through unchanged.
+/// ISteamUtils::InitFilterText: explicitly initialize before filterText.
+/// False preserves native language unavailability: FilterText may still pass
+/// input through unchanged.
 pub fn initFilter(self: Utils) !bool {
     self.lease.check();
     return boolean(native.sw_utils_init_filter());
 }
 
-/// Caller owns output; it must not overlap input (including its NUL) and must
-/// hold input.len + 1 bytes. Output may be modified after local validation,
+/// ISteamUtils::FilterText. Caller owns output; it must not overlap input
+/// (including its NUL) and must hold input.len + 1 bytes.
+/// Output may be modified after local validation,
 /// including when the interface is unavailable or the native result malformed.
 /// The signed filtered-character count is independent of the output byte count.
 pub fn filterText(self: Utils, options: FilterOptions, input: [:0]const u8, output: []u8) !FilterResult {

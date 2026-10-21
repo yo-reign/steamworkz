@@ -1,3 +1,9 @@
+//! Owner-thread, session-borrowed sockets and relay access. Handles need explicit
+//! close/destroy; copied status values do not. Receive calls transfer SDK message
+//! ownership into caller slots: release every batch before Client.deinit.
+//! Connection callbacks arrive through Client pumping/polling, not receive calls.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamNetworkingSockets
+//! and https://partner.steamgames.com/doc/api/ISteamNetworkingUtils
 const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
@@ -10,7 +16,9 @@ lease: Context.Lease,
 
 /// Handles belong to the creating client session; never reuse them in a new one.
 pub const Connection = enum(u32) { invalid = 0, _ };
+/// Session handle; closeListen releases it and closes its incoming connections.
 pub const ListenSocket = enum(u32) { invalid = 0, _ };
+/// Session receive grouping; destroyPollGroup does not close member connections.
 pub const PollGroup = enum(u32) { invalid = 0, _ };
 pub const State = enum(i32) {
     none = 0,
@@ -320,6 +328,7 @@ pub const Metadata = struct {
     /// Message numbers are per lane. Only reliable messages within one lane
     /// have an ordering guarantee; numbers are not globally unique.
     number: i64,
+    /// SDK local monotonic timestamp in microseconds, not Unix time.
     received_at: i64,
     channel: i32,
     /// Raw incoming lane, independent of channel and outgoing wrapper bounds.
@@ -336,6 +345,8 @@ pub const Message = struct {
     data: []const u8,
     metadata: Metadata,
 
+    /// Borrows SDK payload until this message/batch is deinitialized. Copy bytes
+    /// before retaining beyond that point; access after release is a runtime panic.
     pub fn bytes(self: *const Message) []const u8 {
         self.lease.check();
         if (self.handle == null) @panic("Steamworks message has been released");
@@ -381,6 +392,8 @@ pub const Message = struct {
 pub const MessageBatch = struct {
     messages: []Message,
 
+    /// Releases remaining SteamNetworkingMessage_t owners, not the caller's slots.
+    /// Call on the client owner thread while the original session is still live.
     pub fn deinit(self: *MessageBatch) void {
         self.releaseWith(c.sw_networking_release_message);
     }
@@ -408,6 +421,9 @@ pub fn formatAddress(self: Networking, address: Address, buffer: *[address_text_
     if (c.sw_networking_format_address(&value, buffer, buffer.len, @intFromBool(with_port)) == 0) return error.Unavailable;
     return types.text(buffer);
 }
+/// ISteamNetworkingSockets::CreateListenSocketIP. Owns a listener until closeListen.
+/// Incoming connection_changed (SteamNetConnectionStatusChangedCallback_t) events
+/// require an explicit accept or close; creation alone does not accept peers.
 pub fn listenIP(self: Networking, address: Address) error{ListenFailed}!ListenSocket {
     self.lease.check();
     const value = address.native();
@@ -415,6 +431,8 @@ pub fn listenIP(self: Networking, address: Address) error{ListenFailed}!ListenSo
     if (handle == 0) return error.ListenFailed;
     return @enumFromInt(handle);
 }
+/// ISteamNetworkingSockets::ConnectByIPAddress starts connecting, not a ready link.
+/// Observe connection_changed.info.state; close the handle even after terminal failure.
 pub fn connectIP(self: Networking, address: Address) error{ConnectFailed}!Connection {
     self.lease.check();
     const value = address.native();
@@ -422,12 +440,17 @@ pub fn connectIP(self: Networking, address: Address) error{ConnectFailed}!Connec
     if (handle == 0) return error.ConnectFailed;
     return @enumFromInt(handle);
 }
+/// ISteamNetworkingSockets::CreateListenSocketP2P; virtual_port is a logical
+/// endpoint, not a UDP port. Accept/close incoming connections; closeListen when done.
 pub fn listenP2P(self: Networking, virtual_port: u16) error{ListenFailed}!ListenSocket {
     self.lease.check();
     const handle = c.sw_networking_listen_p2p(virtual_port);
     if (handle == 0) return error.ListenFailed;
     return @enumFromInt(handle);
 }
+/// ISteamNetworkingSockets::ConnectP2P targets the peer's logical virtual_port.
+/// Returning a handle is not connection success; observe connection_changed and
+/// eventually close, including after failure. No application handshake is supplied.
 pub fn connectP2P(self: Networking, peer: types.SteamId, virtual_port: u16) error{ InvalidSteamId, ConnectFailed }!Connection {
     self.lease.check();
     if (peer == .invalid) return error.InvalidSteamId;
@@ -435,11 +458,13 @@ pub fn connectP2P(self: Networking, peer: types.SteamId, virtual_port: u16) erro
     if (handle == 0) return error.ConnectFailed;
     return @enumFromInt(handle);
 }
+/// ISteamNetworkingSockets::AcceptConnection for an incoming connecting event.
+/// Preserves the native Result; .ok accepts the attempt, not a completed handshake.
 pub fn accept(self: Networking, connection: Connection) types.Result {
     self.lease.check();
     return @enumFromInt(c.sw_networking_accept(@intFromEnum(connection)));
 }
-/// Terminal connection callbacks do not release a connection: explicitly close
+/// ISteamNetworkingSockets::CloseConnection. Terminal callbacks do not release it: close
 /// it even after closed_by_peer or problem_detected_locally. Debug text is
 /// borrowed only for this call. Linger permits queued reliable sends to drain.
 pub fn close(self: Networking, connection: Connection, options: CloseOptions) error{ InvalidDebugText, OperationFailed }!void {
@@ -450,8 +475,9 @@ pub fn close(self: Networking, connection: Connection, options: CloseOptions) er
     if (c.sw_networking_close(@intFromEnum(connection), options.reason, if (options.debug) |text| text.ptr else null, @intFromBool(options.linger)) == 0)
         return error.OperationFailed;
 }
-/// The SDK closes associated incoming connections ungracefully when destroying
-/// the listener. Plan graceful connection shutdown separately before this call.
+/// ISteamNetworkingSockets::CloseListenSocket destroys the listener and closes
+/// associated incoming connections ungracefully. Plan graceful connection shutdown
+/// separately before this call.
 pub fn closeListen(self: Networking, socket: ListenSocket) error{OperationFailed}!void {
     self.lease.check();
     if (c.sw_networking_close_listen(@intFromEnum(socket)) == 0) return error.OperationFailed;
@@ -465,8 +491,10 @@ pub fn socketPair(self: Networking, options: SocketPairOptions) error{OperationF
     if (c.sw_networking_socket_pair(&first, &second, @intFromBool(options.network_loopback)) == 0) return error.OperationFailed;
     return .{ @enumFromInt(first), @enumFromInt(second) };
 }
-/// Sends on lane zero. Local errors use Zig errors; native rejection retains
-/// its Result in the outcome. Use sendBatch (including one entry) for other lanes.
+/// ISteamNetworkingSockets::SendMessageToConnection copies data during the call;
+/// no borrowed payload survives return. Sends on lane zero; acceptance is not delivery.
+/// Local errors use Zig errors; native rejection retains its Result in the outcome.
+/// Use sendBatch (including one entry) for other lanes.
 pub fn send(self: Networking, connection: Connection, data: []const u8, options: SendOptions) error{ TooLarge, InvalidSendOptions }!SendOutcome {
     self.lease.check();
     return sendMessage(connection, data, try options.flags());
@@ -533,17 +561,26 @@ fn sendBatchWith(self: Networking, messages: []const BatchSend, outcomes: []Batc
     for (outcomes[0..messages.len], results[0..messages.len]) |*out, raw| out.* = BatchSendOutcome.fromNative(raw);
     return outcomes[0..messages.len];
 }
+/// ISteamNetworkingSockets::FlushMessagesOnConnection bypasses the Nagle wait.
+/// Preserves the native Result; .ok is not a delivery acknowledgement.
 pub fn flush(self: Networking, connection: Connection) types.Result {
     self.lease.check();
     return @enumFromInt(c.sw_networking_flush(@intFromEnum(connection)));
 }
 
 pub const ReceiveError = error{ TooManyMessages, ReceiveFailed, InvalidMessage };
-/// Writes at most max_receive messages into unowned/undefined output slots.
-/// The batch contains only initialized slots. Use defer batch.deinit() immediately.
+/// ISteamNetworkingSockets::ReceiveMessagesOnConnection. out.len must not exceed
+/// max_receive; slots must be unowned/undefined. Returns only initialized messages,
+/// possibly none; it does not pump connection callbacks. Install defer batch.deinit()
+/// immediately and release before client close or slot reuse. Errors release any
+/// native messages acquired by this call; no partial batch escapes.
 pub fn receive(self: Networking, connection: Connection, out: []Message) ReceiveError!MessageBatch {
     return self.receiveBatch(@intFromEnum(connection), false, out);
 }
+/// ISteamNetworkingSockets::ReceiveMessagesOnPollGroup. Same slot/cleanup contract
+/// as receive: defer batch.deinit(), before client close or reusing storage.
+/// Each message's metadata.connection identifies its source; destroying the group
+/// does not release already received messages or close its connections.
 pub fn receivePollGroup(self: Networking, group: PollGroup, out: []Message) ReceiveError!MessageBatch {
     return self.receiveBatch(@intFromEnum(group), true, out);
 }
@@ -566,12 +603,15 @@ fn receiveBatch(self: Networking, handle: u32, poll_group: bool, out: []Message)
     for (views[0..length], out[0..length]) |view, *message| message.* = Message.adopt(self.lease, view);
     return .{ .messages = out[0..length] };
 }
+/// ISteamNetworkingSockets::GetConnectionInfo returns an owned snapshot, not
+/// a live reference. InfoUnavailable includes invalid/closed handles.
 pub fn connectionInfo(self: Networking, connection: Connection) error{InfoUnavailable}!Info {
     self.lease.check();
     var value: c.SwConnectionInfo = undefined;
     if (c.sw_networking_connection_info(@intFromEnum(connection), &value) == 0) return error.InfoUnavailable;
     return Info.fromNative(value);
 }
+/// ISteamNetworkingSockets::GetConnectionRealTimeStatus.
 /// Requests exactly lanes.len entries (lane zero onward), including zero or a
 /// prefix. The caller tracks the configured count: requesting more configured
 /// lanes than exist is left to native validation. Outputs are unchanged unless
@@ -591,8 +631,9 @@ fn realTimeStatusWith(self: Networking, connection: Connection, lanes: []LaneRea
     for (lanes, native_lanes[0..lanes.len]) |*lane, native_lane| lane.* = LaneRealTimeStatus.fromNative(native_lane);
     return .{ .status = RealTimeStatus.fromNative(value) };
 }
-/// Caller-storage-only text. Empty storage queries with null/zero. The SDK may
-/// modify/truncate a short buffer: no untouched-buffer guarantee is made.
+/// ISteamNetworkingSockets::GetDetailedConnectionStatus. Caller-storage-only text.
+/// Empty storage queries with null/zero. The SDK may modify/truncate a short
+/// buffer: no untouched-buffer guarantee is made.
 /// Retry with the reported capacity; status can change between calls.
 pub fn detailedStatus(self: Networking, connection: Connection, buffer: []u8) error{ BufferTooLarge, Unavailable, BridgeFailed, UnterminatedStatus }!DetailedStatusOutcome {
     return self.detailedStatusWith(connection, buffer, c.sw_networking_detailed_status);
@@ -618,31 +659,43 @@ fn checkStatusBridge(result: c_int) error{ Unavailable, BridgeFailed }!void {
         else => return error.BridgeFailed,
     }
 }
+/// ISteamNetworkingSockets::GetListenSocketAddress; owned IP endpoint, including
+/// the actual bound port when listenIP requested port zero.
 pub fn listenAddress(self: Networking, socket: ListenSocket) error{AddressUnavailable}!Address {
     self.lease.check();
     var value: c.SwAddress = undefined;
     if (c.sw_networking_listen_address(@intFromEnum(socket), &value) == 0) return error.AddressUnavailable;
     return Address.fromNative(value);
 }
+/// ISteamNetworkingSockets::CreatePollGroup creates an empty receive group.
+/// Attach with setPollGroup; explicitly destroyPollGroup before Client.deinit.
 pub fn createPollGroup(self: Networking) error{PollGroupFailed}!PollGroup {
     self.lease.check();
     const group = c.sw_networking_create_poll_group();
     if (group == 0) return error.PollGroupFailed;
     return @enumFromInt(group);
 }
+/// ISteamNetworkingSockets::DestroyPollGroup detaches, but does not close, its
+/// connections. Already received batches still need their own deinit.
 pub fn destroyPollGroup(self: Networking, group: PollGroup) error{OperationFailed}!void {
     self.lease.check();
     if (c.sw_networking_destroy_poll_group(@intFromEnum(group)) == 0) return error.OperationFailed;
 }
-/// Use .invalid to detach a connection. Destroying a group does not close its connections.
+/// ISteamNetworkingSockets::SetConnectionPollGroup assigns one group per connection.
+/// Use .invalid to detach. Destroying a group does not close its connections.
 pub fn setPollGroup(self: Networking, connection: Connection, group: PollGroup) error{OperationFailed}!void {
     self.lease.check();
     if (c.sw_networking_set_poll_group(@intFromEnum(connection), @intFromEnum(group)) == 0) return error.OperationFailed;
 }
+/// ISteamNetworkingUtils::InitRelayNetworkAccess begins relay preparation explicitly.
+/// Success means invocation only; inspect relayStatus or relay_status events
+/// (SteamRelayNetworkStatus_t) for availability. May start network work.
 pub fn initRelay(self: Networking) error{Unavailable}!void {
     self.lease.check();
     if (c.sw_networking_init_relay() == 0) return error.Unavailable;
 }
+/// ISteamNetworkingUtils::GetRelayNetworkStatus returns an owned current snapshot.
+/// Unknown availability values survive; no relay initialization is implied.
 pub fn relayStatus(self: Networking) error{Unavailable}!RelayStatus {
     self.lease.check();
     var value: c.SwRelayStatus = undefined;

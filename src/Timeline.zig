@@ -1,6 +1,8 @@
 //! Borrowed owner-thread timeline facade. Calls explicitly forward recording
 //! metadata; success does not prove recorded content. Construction is inert.
 //! Text borrows caller storage for each call and must be complete NUL-free UTF-8.
+//! Offsets/durations are seconds; negative offsets refer to the past.
+//! Valve: https://partner.steamgames.com/doc/api/ISteamTimeline
 const std = @import("std");
 const Context = @import("Context.zig");
 const c = @cImport({
@@ -48,23 +50,30 @@ pub const Update = struct {
     clip: ClipPriority,
 };
 
+/// ISteamTimeline::SetTimelineGameMode changes the timeline's game-state presentation;
+/// it does not enable recording or establish that recording is available.
 pub fn setMode(self: Timeline, mode: Mode) Error!void {
     self.lease.check();
     const value = @intFromEnum(mode);
     if (value < 1 or value > 4) return error.InvalidArgument;
     try status(native.sw_timeline_mode(value));
 }
+/// ISteamTimeline::SetTimelineTooltip; description should be localized by the
+/// caller. offset is finite seconds relative to now, not an absolute timestamp.
 pub fn setTooltip(self: Timeline, description: [:0]const u8, offset: f32) Error!void {
     self.lease.check();
     try text(description);
     try finite(offset);
     try status(native.sw_timeline_tooltip(description.ptr, offset));
 }
+/// ISteamTimeline::ClearTimelineTooltip at an offset in seconds relative to now.
 pub fn clearTooltip(self: Timeline, offset: f32) Error!void {
     self.lease.check();
     try finite(offset);
     try status(native.sw_timeline_clear_tooltip(offset));
 }
+/// ISteamTimeline::AddInstantaneousTimelineEvent adds a closed marker. The returned
+/// identity has no memory-release obligation; remove explicitly deletes content.
 pub fn instant(self: Timeline, event: Event, options: InstantOptions) Error!Marker {
     self.lease.check();
     try validEvent(event);
@@ -74,6 +83,8 @@ pub fn instant(self: Timeline, event: Event, options: InstantOptions) Error!Mark
     try status(native.sw_timeline_instant(event.title.ptr, event.description.ptr, event.icon.ptr, event.priority, options.offset, @intFromEnum(options.clip), &handle));
     return @enumFromInt(handle);
 }
+/// ISteamTimeline::AddRangeTimelineEvent adds an already-completed range;
+/// duration is 0..max_duration seconds. Unlike start, this creates no open owner.
 pub fn completed(self: Timeline, event: Event, options: CompletedOptions) Error!Marker {
     self.lease.check();
     try validEvent(event);
@@ -85,6 +96,7 @@ pub fn completed(self: Timeline, event: Event, options: CompletedOptions) Error!
     try status(native.sw_timeline_completed(event.title.ptr, event.description.ptr, event.icon.ptr, event.priority, options.offset, options.duration, @intFromEnum(options.clip), &handle));
     return @enumFromInt(handle);
 }
+/// ISteamTimeline::StartRangeTimelineEvent; offset is seconds relative to now.
 /// Start has no defaults. End or cancel each acquired range. Callers own timing:
 /// SDK range duration is limited to 600 seconds; no elapsed clock is maintained.
 pub fn start(self: Timeline, event: Event, offset: f32, clip: ClipPriority) Error!Range {
@@ -133,7 +145,9 @@ pub const Range = struct {
         };
         try status(native.sw_timeline_update(self.lease.context.timeline_ranges[slot].handle, value.title.ptr, value.description.ptr, value.icon.ptr, priority, @intFromEnum(value.clip)));
     }
-    /// No default end offset; negative finite offsets are allowed.
+    /// ISteamTimeline::EndRangeTimelineEvent consumes this open owner and returns
+    /// a closed marker. offset is seconds relative to now; negative finite values
+    /// are allowed. No implicit elapsed-time tracking or default offset.
     pub fn end(self: Range, offset: f32) Error!Marker {
         self.lease.check();
         const index = try self.slotIndex();
@@ -144,6 +158,8 @@ pub const Range = struct {
         slot.* = .{};
         return marker;
     }
+    /// ISteamTimeline::RemoveTimelineEvent deletes this open range rather than
+    /// completing it. Successful forwarding consumes all copies of the owner.
     pub fn cancel(self: Range) Error!void {
         self.lease.check();
         const index = try self.slotIndex();

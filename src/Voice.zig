@@ -2,6 +2,8 @@
 //! stop are explicit; after stop, keep reading until NotRecording to drain the
 //! native tail. Session close discards any remaining tail without waiting.
 //! No playback, transmission, arbitrary-PCM encoding or audio thread is owned.
+//! Voice methods belong to ISteamUser, not a separate voice interface:
+//! https://partner.steamgames.com/doc/api/ISteamUser
 const std = @import("std");
 const Context = @import("Context.zig");
 const c = @cImport({
@@ -48,7 +50,8 @@ pub const Decoded = struct {
     malformed_count: bool,
 };
 
-/// Native StartVoiceRecording returns void: invocation, not microphone readiness.
+/// ISteamUser::StartVoiceRecording explicitly enables microphone capture.
+/// Returns void natively: invocation, not microphone readiness.
 pub fn start(self: Voice) Error!void {
     self.lease.check();
     switch (self.lease.context.voice_state) {
@@ -72,6 +75,7 @@ pub fn stop(self: Voice) Error!StopOutcome {
     self.lease.context.voice_state = .draining;
     return .draining;
 }
+/// Wrapper recording/draining state, not a device or native readiness query.
 pub fn state(self: Voice) State {
     self.lease.check();
     return self.lease.context.voice_state;
@@ -84,6 +88,7 @@ pub fn shutdown(lease: Context.Lease) void {
     if (lease.context.voice_state == .recording) _ = native.sw_voice_stop();
     lease.context.voice_state = .inactive;
 }
+/// ISteamUser::GetAvailableVoice queries compressed byte availability.
 /// A snapshot, not a promise that a later read will fill this many bytes.
 /// NotRecording here does not complete draining; only read can do that.
 pub fn available(self: Voice) Error!Available {
@@ -93,8 +98,9 @@ pub fn available(self: Voice) Error!Available {
     try status(native.sw_voice_available(&result, &bytes));
     return .{ .result = @enumFromInt(result), .compressed_bytes = bytes };
 }
-/// Explicit native read in any wrapper state, including inactive. NoData does
-/// not complete draining. Only a native NotRecording transitions to inactive.
+/// ISteamUser::GetVoice reads compressed data only. Inspect result and
+/// malformed_count before using data. Explicit read in any state, including
+/// inactive. NoData does not finish draining; only NotRecording does.
 pub fn read(self: Voice, destination: []u8) Error!Compressed {
     self.lease.check();
     const capacity = try byteCount(destination.len);
@@ -111,7 +117,8 @@ pub fn read(self: Voice, destination: []u8) Error!Compressed {
         .malformed_count = malformed,
     };
 }
-/// Decode into caller-owned mono PCM at 11025..48000 Hz inclusive. Input and
+/// ISteamUser::DecompressVoice into caller-owned mono PCM at 11025..48000 Hz.
+/// Inspect result and malformed_count before using data. Input and
 /// output must not overlap. Native failure may still modify destination.
 pub fn decode(self: Voice, compressed: []const u8, destination: []i16, sample_rate: u32) Error!Decoded {
     self.lease.check();
