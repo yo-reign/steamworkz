@@ -260,27 +260,28 @@ Use matching **Zig 0.16.0 and ZLS 0.16.0**. Start the editor/language server wit
 local `zls.build.json`. A terminal export does not update an already-running editor.
 The SDK is still external; no header copy or binding-generation step is needed.
 
-ZLS evaluates the build graph to discover imports. If the game conditionally adds
-Steamworkz, enable that option for the editor too. For Meikyuu's `steamworks`
-option, place this **local editor configuration** beside the game's `build.zig`:
+ZLS evaluates the build graph to discover imports. If your project conditionally
+adds Steamworkz, enable your project's option for the editor too. For example,
+if your build defines a `steamworks-enabled` option, place this **local editor
+configuration** beside your `build.zig`:
 
 ```json
 {
   "build_options": [
-    { "name": "steamworks", "value": "true" }
+    { "name": "steamworks-enabled", "value": "true" }
   ]
 }
 ```
 
 Keep the SDK path in the editor's environment rather than in versioned JSON.
-Other consumers should substitute their own enable-option name, or omit this
-file when Steamworkz is always imported. Library development itself needs no
-`steamworks` flag; it needs the SDK configuration described above.
+Use the option name defined by your build; `steamworks-enabled` is only an example.
+Omit this override when Steamworkz is always imported. Library development itself
+needs only the SDK configuration described above.
 See [ZLS per-build configuration](https://zigtools.org/zls/configure/per-build/).
 
 After reloading ZLS, try `@import("steamworkz")` → `Client.init`, then a service
 method and its request result. Navigation should open the dependency **revision
-pinned by the game**, not an unrelated sibling checkout. A successful SDK-free
+pinned by your project**, not an unrelated checkout. A successful SDK-free
 build configuration can still omit Steamworkz entirely; unresolved Steam imports
 in that mode do not mean the package is broken.
 
