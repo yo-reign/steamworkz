@@ -7,9 +7,7 @@ const Context = @import("Context.zig");
 const types = @import("types.zig");
 const events = @import("events.zig");
 const requests = @import("requests.zig");
-const c = @cImport({
-    @cInclude("workshop.h");
-});
+const c = @import("steamworkz_c");
 const native = if (@import("builtin").is_test) TestApi else c;
 const Workshop = @This();
 
@@ -97,7 +95,7 @@ pub const Query = struct {
     /// Borrowed identity for correlation, not an ownership transfer. Release the
     /// Query owner, never attempt cleanup through a completion's bare handle.
     pub fn handle(self: Query) Error!types.WorkshopQuery {
-        return @enumFromInt((try self.context()).workshop_handle);
+        return @fromBackingInt(@intCast((try self.context()).workshop_handle));
     }
     /// Null until successful query completion. Zero is a valid ready count.
     pub fn resultCount(self: Query) Error!?u32 {
@@ -119,7 +117,7 @@ pub const Query = struct {
         }
         ctx.workshop_call = call;
         ctx.workshop_state = .pending;
-        return requests.Request(.workshop_query_completed).init(@enumFromInt(call));
+        return requests.Request(.workshop_query_completed).init(@fromBackingInt(@intCast(call)));
     }
     /// Getter bool, per-row result, and query completion result are independent.
     /// False leaves caller storage unchanged. Successful rows survive release.
@@ -160,7 +158,7 @@ pub fn createDetailsQuery(self: Workshop, items: []const types.WorkshopItem) Err
     if (items.len == 0 or items.len > 50) return error.InvalidArgument;
     if (ctx.workshop_serial == std.math.maxInt(u64)) return error.TokenExhausted;
     var ids: [50]u64 = undefined;
-    for (items, 0..) |item, i| ids[i] = @intFromEnum(item);
+    for (items, 0..) |item, i| ids[i] = @backingInt(item);
     var handle: u64 = std.math.maxInt(u64);
     try status(native.sw_workshop_create(&ids, items.len, &handle));
     if (handle == std.math.maxInt(u64)) return error.QueryRejected;
@@ -180,12 +178,12 @@ pub fn createDetailsQuery(self: Workshop, items: []const types.WorkshopItem) Err
 pub fn observeCompletion(lease: Context.Lease, event: *const events.Event) void {
     lease.check();
     const ctx = lease.context;
-    if (ctx.workshop_state != .pending or ctx.workshop_call == 0 or @intFromEnum(event.call) != ctx.workshop_call) return;
+    if (ctx.workshop_state != .pending or ctx.workshop_call == 0 or @backingInt(event.call) != ctx.workshop_call) return;
     ctx.workshop_call = 0;
     ctx.workshop_state = .failed;
     switch (event.payload) {
         .workshop_query_completed => |value| {
-            if (@intFromEnum(value.query) != ctx.workshop_handle or value.result != .ok or value.returned > ctx.workshop_requested) return;
+            if (@backingInt(value.query) != ctx.workshop_handle or value.result != .ok or value.returned > ctx.workshop_requested) return;
             ctx.workshop_returned = value.returned;
             ctx.workshop_state = .ready;
         },
@@ -228,14 +226,14 @@ pub fn subscriptions(self: Workshop, destination: []types.WorkshopItem, options:
     var count: u32 = 0;
     try status(native.sw_workshop_subscriptions(options.include_locally_disabled, &ids, destination.len, &count));
     if (count > destination.len) return error.MalformedCount;
-    for (destination[0..count], 0..) |*item, i| item.* = @enumFromInt(ids[i]);
+    for (destination[0..count], 0..) |*item, i| item.* = @fromBackingInt(@intCast(ids[i]));
     return .{ .reported = count, .items = destination[0..count] };
 }
 /// All EItemState bits are retained, including unknown future bits.
 pub fn itemState(self: Workshop, item: types.WorkshopItem) Error!u32 {
     self.lease.check();
     var flags: u32 = 0;
-    try status(native.sw_workshop_state(@intFromEnum(item), &flags));
+    try status(native.sw_workshop_state(@backingInt(item), &flags));
     return flags;
 }
 pub const InstallInfo = struct { found: bool, size: u64, timestamp: u32, path: ?[]const u8 };
@@ -248,7 +246,7 @@ pub fn installInfo(self: Workshop, item: types.WorkshopItem, path: []u8) Error!I
     var size: u64 = 0;
     var timestamp: u32 = 0;
     var length: usize = 0;
-    try status(native.sw_workshop_install(@intFromEnum(item), path.ptr, path.len, &found, &size, &timestamp, &length));
+    try status(native.sw_workshop_install(@backingInt(item), path.ptr, path.len, &found, &size, &timestamp, &length));
     if (found and (length >= path.len or path[length] != 0)) return error.UnterminatedPath;
     return .{ .found = found, .size = size, .timestamp = timestamp, .path = if (found) path[0..length] else null };
 }
@@ -258,7 +256,7 @@ pub const DownloadProgress = struct { found: bool, downloaded: u64, total: u64 }
 pub fn downloadProgress(self: Workshop, item: types.WorkshopItem) Error!DownloadProgress {
     self.lease.check();
     var value: DownloadProgress = .{ .found = false, .downloaded = 0, .total = 0 };
-    try status(native.sw_workshop_progress(@intFromEnum(item), &value.found, &value.downloaded, &value.total));
+    try status(native.sw_workshop_progress(@backingInt(item), &value.found, &value.downloaded, &value.total));
     return value;
 }
 pub const DownloadOptions = struct { high_priority: bool = false };
@@ -269,7 +267,7 @@ pub const DownloadOptions = struct { high_priority: bool = false };
 pub fn downloadItem(self: Workshop, item: types.WorkshopItem, options: DownloadOptions) Error!bool {
     self.lease.check();
     var accepted = false;
-    try status(native.sw_workshop_download(@intFromEnum(item), options.high_priority, &accepted));
+    try status(native.sw_workshop_download(@backingInt(item), options.high_priority, &accepted));
     return accepted;
 }
 
@@ -296,18 +294,18 @@ fn text(bytes: []const u8) []const u8 {
 }
 fn copyDetails(value: *const c.struct_sw_workshop_details) Details {
     return .{
-        .item = @enumFromInt(value.item),
-        .result = @enumFromInt(value.result),
-        .file_type = @enumFromInt(value.file_type),
+        .item = @fromBackingInt(@intCast(value.item)),
+        .result = @fromBackingInt(@intCast(value.result)),
+        .file_type = @fromBackingInt(@intCast(value.file_type)),
         .creator_app = value.creator_app,
         .consumer_app = value.consumer_app,
         .title = @bitCast(value.title),
         .description = @bitCast(value.description),
-        .owner = @enumFromInt(value.owner),
+        .owner = @fromBackingInt(@intCast(value.owner)),
         .created = value.created,
         .updated = value.updated,
         .added_to_list = value.added_to_list,
-        .visibility = @enumFromInt(value.visibility),
+        .visibility = @fromBackingInt(@intCast(value.visibility)),
         .banned = value.banned,
         .accepted_for_use = value.accepted_for_use,
         .tags_truncated = value.tags_truncated,
@@ -425,10 +423,10 @@ const TestApi = struct {
         return 0;
     }
 };
-const test_items = [_]types.WorkshopItem{ @enumFromInt(17), @enumFromInt(0), @enumFromInt(17) };
+const test_items = [_]types.WorkshopItem{ @fromBackingInt(@intCast(17)), @fromBackingInt(@intCast(0)), @fromBackingInt(@intCast(17)) };
 fn completion(call: u64, handle: u64, result: types.Result, returned: u32) events.Event {
-    return .{ .call = @enumFromInt(call), .callback_id = 3401, .payload = .{ .workshop_query_completed = .{
-        .query = @enumFromInt(handle),
+    return .{ .call = @fromBackingInt(@intCast(call)), .callback_id = 3401, .payload = .{ .workshop_query_completed = .{
+        .query = @fromBackingInt(@intCast(handle)),
         .result = result,
         .returned = returned,
         .total = 100,
@@ -460,7 +458,7 @@ test "Workshop acquisition validates bounds, native sentinel, zero handle and no
     const q = try w.createDetailsQuery(&test_items);
     defer _ = q.release() catch false;
     try std.testing.expectEqualSlices(u64, &.{ 17, 0, 17 }, TestApi.ids[0..3]);
-    try std.testing.expectEqual(@as(u64, 0), @intFromEnum(try q.handle()));
+    try std.testing.expectEqual(@as(u64, 0), @backingInt(try q.handle()));
     try std.testing.expectEqual(QueryState.created, try q.state());
     try std.testing.expectEqual(@as(?u32, null), try q.resultCount());
     try std.testing.expectError(error.QueryBusy, w.createDetailsQuery(&test_items));
@@ -508,14 +506,14 @@ test "Workshop matching success ignores broadcasts unrelated and duplicate compl
     const q = try w.createDetailsQuery(&test_items);
     defer _ = q.release() catch false;
     var request = try q.send();
-    try std.testing.expectEqual(@as(u64, 71), @intFromEnum(request.call));
+    try std.testing.expectEqual(@as(u64, 71), @backingInt(request.call));
     try std.testing.expectError(error.QueryAlreadySent, q.send());
     const before = TestApi.calls;
     try std.testing.expectError(error.QueryPending, q.release());
     try std.testing.expectEqual(before, TestApi.calls);
     var event = completion(0, 0, .ok, 3);
     observeCompletion(w.lease, &event);
-    event.call = @enumFromInt(72);
+    event.call = @fromBackingInt(@intCast(72));
     observeCompletion(w.lease, &event);
     try std.testing.expectEqual(QueryState.pending, try q.state());
     event.call = request.call;
@@ -540,14 +538,14 @@ test "Workshop every matching failure category is terminal and never trusts call
     const Payload = @FieldType(events.Event, "payload");
     const failures = [_]Payload{
         .{ .call_failed = .result_unavailable }, .{ .call_failed = .io_failure },    .malformed,                          .unhandled,
-        .{ .lobby_list = 7 },                    completion(71, 99, .ok, 3).payload, completion(71, 0, .fail, 3).payload, completion(71, 0, @enumFromInt(123456), 3).payload,
+        .{ .lobby_list = 7 },                    completion(71, 99, .ok, 3).payload, completion(71, 0, .fail, 3).payload, completion(71, 0, @fromBackingInt(@intCast(123456)), 3).payload,
         completion(71, 0, .ok, 4).payload,
     };
     for (failures) |payload| {
         const q = try w.createDetailsQuery(&test_items);
         defer _ = q.release() catch false;
         _ = try q.send();
-        var event: events.Event = .{ .call = @enumFromInt(71), .callback_id = 0, .payload = payload };
+        var event: events.Event = .{ .call = @fromBackingInt(@intCast(71)), .callback_id = 0, .payload = payload };
         observeCompletion(w.lease, &event);
         try std.testing.expectEqual(QueryState.failed, try q.state());
         try std.testing.expectEqual(@as(u64, 0), ctx.workshop_call);
@@ -649,11 +647,11 @@ test "Workshop Details copies own every field, bound text and survive scratch ov
     var out: Details = undefined;
     try std.testing.expect(try q.read(0, &out));
     // Fieldwise cross-language mapping is independently asserted in the C++ fixture.
-    inline for (std.meta.fields(Details)) |field| {
-        const actual = @field(out, field.name);
-        const raw = @field(value, field.name);
-        switch (@typeInfo(field.type)) {
-            .@"enum" => try std.testing.expectEqual(raw, @intFromEnum(actual)),
+    inline for (@typeInfo(Details).@"struct".field_names) |field_name| {
+        const actual = @field(out, field_name);
+        const raw = @field(value, field_name);
+        switch (@typeInfo(@TypeOf(actual))) {
+            .@"enum" => try std.testing.expectEqual(raw, @backingInt(actual)),
             .array => try std.testing.expectEqualSlices(u8, std.mem.asBytes(&raw), &actual),
             else => try std.testing.expectEqual(raw, actual),
         }
@@ -694,9 +692,9 @@ test "Workshop subscription and item operations preserve bounds defaults flags a
     try std.testing.expectEqualSlices(types.WorkshopItem, &test_items, result.items);
     try std.testing.expect(!TestApi.disabled);
     TestApi.count = 4;
-    items[0] = @enumFromInt(99);
+    items[0] = @fromBackingInt(@intCast(99));
     try std.testing.expectError(error.MalformedCount, w.subscriptions(&items, .{ .include_locally_disabled = true }));
-    try std.testing.expectEqual(@as(u64, 99), @intFromEnum(items[0]));
+    try std.testing.expectEqual(@as(u64, 99), @backingInt(items[0]));
     try std.testing.expect(TestApi.disabled);
     const before = TestApi.calls;
     var many: [1025]types.WorkshopItem = undefined;

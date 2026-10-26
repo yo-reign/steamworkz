@@ -70,20 +70,20 @@ fn Tracker(comptime CompletionValue: type, comptime kind: std.meta.Tag(Payload))
 }
 
 test "requests ignore broadcasts and unrelated events then complete only once" {
-    var request = try Request(.lobby_created).init(@enumFromInt(42));
+    var request = try Request(.lobby_created).init(@fromBackingInt(@intCast(42)));
     var event: Event = .{
         .call = .invalid,
         .callback_id = 513,
-        .payload = .{ .lobby_created = .{ .lobby = @enumFromInt(123), .result = .ok } },
+        .payload = .{ .lobby_created = .{ .lobby = @fromBackingInt(@intCast(123)), .result = .ok } },
     };
     try std.testing.expect(try request.take(&event) == null);
-    event.call = @enumFromInt(43);
+    event.call = @fromBackingInt(@intCast(43));
     try std.testing.expect(try request.take(&event) == null);
     try std.testing.expect(request.isPending());
     event.call = request.call;
     const before = event;
     const value = (try request.take(&event)).?;
-    try std.testing.expectEqual(@as(types.SteamId, @enumFromInt(123)), value.lobby);
+    try std.testing.expectEqual(@as(types.SteamId, @fromBackingInt(@intCast(123))), value.lobby);
     try std.testing.expectEqual(types.Result.ok, value.result);
     try std.testing.expect(!request.isPending());
     try std.testing.expect(try request.take(&event) == null);
@@ -99,8 +99,8 @@ test "request failures consume only the matching tracker and preserve their caus
         .{ .payload = .{ .lobby_list = 3 }, .failure = error.UnexpectedResult },
     };
     for (cases) |case| {
-        var request = try Request(.lobby_created).init(@enumFromInt(42));
-        var event: Event = .{ .call = @enumFromInt(43), .callback_id = 0, .payload = case.payload };
+        var request = try Request(.lobby_created).init(@fromBackingInt(@intCast(42)));
+        var event: Event = .{ .call = @fromBackingInt(@intCast(43)), .callback_id = 0, .payload = case.payload };
         try std.testing.expect(try request.take(&event) == null);
         try std.testing.expect(request.isPending());
         event.call = request.call;
@@ -111,36 +111,36 @@ test "request failures consume only the matching tracker and preserve their caus
 }
 
 test "completion retrieval preserves unsuccessful and unknown operation results" {
-    var request = try Request(.lobby_created).init(@enumFromInt(42));
+    var request = try Request(.lobby_created).init(@fromBackingInt(@intCast(42)));
     const event: Event = .{
         .call = request.call,
         .callback_id = 513,
-        .payload = .{ .lobby_created = .{ .lobby = .invalid, .result = @enumFromInt(123456) } },
+        .payload = .{ .lobby_created = .{ .lobby = .invalid, .result = @fromBackingInt(@intCast(123456)) } },
     };
     const value = (try request.take(&event)).?;
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(value.result));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(value.result));
     try std.testing.expectEqual(types.SteamId.invalid, value.lobby);
 }
 
 test "each exposed asynchronous operation has a typed completion" {
     const cases = .{
-        .{ .lobby_created, Payload{ .lobby_created = .{ .lobby = @enumFromInt(1), .result = .ok } } },
-        .{ .lobby_entered, Payload{ .lobby_entered = .{ .lobby = @enumFromInt(1), .response = .full, .locked = true } } },
+        .{ .lobby_created, Payload{ .lobby_created = .{ .lobby = @fromBackingInt(@intCast(1)), .result = .ok } } },
+        .{ .lobby_entered, Payload{ .lobby_entered = .{ .lobby = @fromBackingInt(@intCast(1)), .response = .full, .locked = true } } },
         .{ .lobby_list, Payload{ .lobby_list = 7 } },
-        .{ .stats_received, Payload{ .stats_received = .{ .game = 480, .user = @enumFromInt(2), .result = .fail } } },
+        .{ .stats_received, Payload{ .stats_received = .{ .game = 480, .user = @fromBackingInt(@intCast(2)), .result = .fail } } },
         .{ .cloud_written, Payload{ .cloud_written = .access_denied } },
-        .{ .leaderboard_found, Payload{ .leaderboard_found = .{ .leaderboard = @enumFromInt(3), .found = false } } },
-        .{ .leaderboard_entries, Payload{ .leaderboard_entries = .{ .leaderboard = @enumFromInt(5), .status = .entry_failed, .reported_count = 7, .failure_index = 0 } } },
-        .{ .leaderboard_uploaded, Payload{ .leaderboard_uploaded = .{ .leaderboard = @enumFromInt(11), .success = false, .score = -13, .changed = false, .rank_new = 0, .rank_previous = 0 } } },
+        .{ .leaderboard_found, Payload{ .leaderboard_found = .{ .leaderboard = @fromBackingInt(@intCast(3)), .found = false } } },
+        .{ .leaderboard_entries, Payload{ .leaderboard_entries = .{ .leaderboard = @fromBackingInt(@intCast(5)), .status = .entry_failed, .reported_count = 7, .failure_index = 0 } } },
+        .{ .leaderboard_uploaded, Payload{ .leaderboard_uploaded = .{ .leaderboard = @fromBackingInt(@intCast(11)), .success = false, .score = -13, .changed = false, .rank_new = 0, .rank_previous = 0 } } },
         .{ .global_percentages_ready, Payload{ .global_percentages_ready = .{ .game = 17, .result = .fail } } },
-        .{ .workshop_query_completed, Payload{ .workshop_query_completed = .{ .query = @enumFromInt(0), .result = .fail, .returned = 0, .total = 3, .cached = false, .cursor = @splat(0) } } },
+        .{ .workshop_query_completed, Payload{ .workshop_query_completed = .{ .query = @fromBackingInt(@intCast(0)), .result = .fail, .returned = 0, .total = 3, .cached = false, .cursor = @splat(0) } } },
     };
     inline for (cases) |case| {
         const T = Request(case[0]);
         try std.testing.expect(T.Value == @FieldType(Payload, @tagName(case[0])));
         std.testing.refAllDecls(T);
         try std.testing.expectError(error.RequestRejected, T.init(.invalid));
-        var request = try T.init(@enumFromInt(1));
+        var request = try T.init(@fromBackingInt(@intCast(1)));
         const event: Event = .{ .call = request.call, .callback_id = 0, .payload = case[1] };
         const value: T.Value = (try request.take(&event)).?;
         try std.testing.expectEqualDeep(@field(case[1], @tagName(case[0])), value);

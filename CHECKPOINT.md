@@ -8,7 +8,48 @@ Track source completion separately from platform, device, account, backend, and 
 
 Full scope and acceptance criteria: [ROADMAP.md](ROADMAP.md).
 
-## Current DX batch — 2026-10-21
+## Zig 0.17 migration — 2026-10-26
+
+The user requested the migration of Steamworkz and Meikyuu to Zig 0.17.0.
+The user waived patch-by-patch approval for this migration, then explicitly
+approved committing and pushing both repositories after validation. This authority
+does not authorize live Steam actions or SDK distribution.
+
+**State: source migration validated locally; publication authorized.**
+This checkpoint records pre-publication evidence. Publish Steamworkz first, then
+resync Meikyuu to the published `main` revision and its computed Zig hash.
+Validate the game with Steamworks disabled and enabled before its commit and push.
+The game must retain an immutable remote dependency, not a sibling path.
+
+The package now uses the pinned official `translate_c` 2.0.2 build dependency.
+Translation covers owned C bridge headers and target libc declarations only.
+The C++ bridge still uses the external SDK 1.65. Reflection, enum conversion,
+array initialization, sentinel formatting, run steps and cache handling use the
+0.17 APIs. Public game-facing APIs, explicit ownership and release-active
+lifecycle guards remain unchanged. README.md explains the concrete migrations.
+
+### Migration evidence
+
+| Gate | Observed result |
+| --- | --- |
+| macOS arm64 `debug`, `safe`, `fast`, `small` | `test test-compile install examples`: 719/719 steps per mode. Each run reports 135/143 passes with eight intentional fatal-body skips. Native fixtures, runner self-tests and separate fatal guards pass |
+| Four-target `fast` compile/link/install | `test-compile install examples`: 80/80 steps for macOS arm64, macOS x86_64 and Linux x86_64 GNU. Windows x86_64 GNU: 77/77. Foreign binaries not executed |
+| Actual source package | Source/archive equality, relocated `fast` aggregate tests/install, independent hash consumer and installed runtime-byte checks pass. Relocated build: 714/714 steps. Independent consumer: 35/35 |
+| Game candidate integration | Temporary game copy consumes the audited archive by URL/hash. Steamworks disabled and enabled: 49/49 headless tests each, plus install/link success. No sibling path dependency |
+| Diagnostics and formatting | Explicit Zig/ZLS 0.17 probe: 26 changed Zig documents report empty diagnostics. Zig formatting, diff checks, checker self-controls in ordinary/optimized Python, and Ruff pass |
+
+The terminal's default compiler still selected Zig 0.16 during this migration.
+All compiler checks above explicitly selected Zig 0.17. An initial editor probe
+using the old compiler reported invalid 0.17 builtins. The configured 0.17 probe
+supersedes those diagnostics. No machine-wide compiler configuration changed.
+
+No live Steam action, tutorial execution, installed consumer execution, or CI
+workflow execution occurred. Linux and Windows runtime/deployment checks remain
+unexecuted on this macOS host. The prepared CI runner label now requires 0.17.0.
+Earlier 0.16 evidence below remains historical and does not establish 0.17 results.
+Raw logs, archive hashes and diagnostics remain outside source in private evidence.
+
+## Historical DX batch — 2026-10-21
 
 The user approved all seven [DX follow-up items](ROADMAP.md#dx--approved-usability-and-robustness-follow-up)
 as a bounded implementation batch after reviewing the research proposal:

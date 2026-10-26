@@ -1,4 +1,4 @@
-//! Steamworkz: game-facing Steamworks 1.65 bindings for Zig 0.16.0.
+//! Steamworkz: game-facing Steamworks 1.65 bindings for Zig 0.17.0.
 //! Public game callers use Zig only; the package privately compiles its C++ bridge.
 //! The SDK is external and consumer-supplied. See the README for setup and ownership.
 //!

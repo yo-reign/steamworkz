@@ -1,4 +1,4 @@
-# Offline validation (Zig 0.16.0, SDK 1.65)
+# Offline validation (Zig 0.17.0, SDK 1.65)
 
 Obtain the official Steamworks SDK under your own agreement. Keep it outside the
 checkout, read-only. Pass `-Dsdk="$STEAMWORKS_SDK"` or export `STEAMWORKS_SDK` to
@@ -8,7 +8,7 @@ option takes precedence. No check downloads the SDK or requires Steam login.
 ## Ordinary build steps — Zig only
 
 ```sh
-zig build test -Dsdk="$STEAMWORKS_SDK" -Doptimize=Debug
+zig build test -Dsdk="$STEAMWORKS_SDK" -Doptimize=debug
 zig build test-core -Dsdk="$STEAMWORKS_SDK"
 zig build test-services -Dsdk="$STEAMWORKS_SDK"
 zig build test-lifecycle -Dsdk="$STEAMWORKS_SDK"
@@ -22,7 +22,7 @@ zig build test-capabilities test-voice test-remote-play test-timeline test-works
 zig build test-capability-guards -Dsdk="$STEAMWORKS_SDK"
 zig build test-consumer -Dsdk="$STEAMWORKS_SDK"
 zig build examples -Dsdk="$STEAMWORKS_SDK" # compile/install only; never execute
-zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast
+zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Doptimize=fast
 ```
 
 - `test` runs the normal Zig suite (including deterministic properties), thirteen
@@ -118,7 +118,7 @@ zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Dtarget=x86_64-windows-gnu -Dopt
 
 Use `-j2` to bound each build invocation. Nested consumer builds and the optional
 maintainer checker also limit each invocation to two jobs.
-Use all four optimization modes for native aggregate gates. Use ReleaseFast
+Use `debug`, `safe`, `fast`, and `small` for native aggregate gates. Use `fast`
 `test-compile` for `aarch64-macos`, `x86_64-macos`, `x86_64-linux-gnu` and
 `x86_64-windows-gnu`; e.g. `-Dcpu=x86_64_v3` additionally exercises CPU features on
 an x86_64 target. Compile/link is not non-host runtime evidence. Inline owned leaderboard storage
@@ -131,7 +131,7 @@ behavior also require separate device/app setup and side-effect authority.
 
 ## Optional maintainer source/package check
 
-Python **3.9+ standard library only**, Git, Zig 0.16.0 and the external SDK are
+Python **3.9+ standard library only**, Git, Zig 0.17.0 and the external SDK are
 required. On Linux, deployment checks additionally require a native x86_64 glibc
 host and binutils `readelf` on PATH. They invoke the ELF interpreter's `--list`
 mode with its cache disabled, not the application entry point or library
@@ -156,15 +156,17 @@ retained on failure, mode 0700, with private files. Do not publish it. The check
 2. Copies regular UTF-8 source only into a fresh snapshot. It rejects symlinks,
    NUL/binary inputs, known private-key/token signatures and machine-path forms.
 3. Runs `zig fetch` from an external driver cwd with an external fresh cache,
-   against the absolute snapshot. No cache, install or `zig-pkg` output is created
-   in the input snapshot (checked for mutation afterward).
+   against the absolute snapshot. Zig 0.17 needs no driver build project for
+   fetch without `--save`. `ZIG_GLOBAL_CACHE_DIR` selects each fresh global cache.
+   Build invocations use `--pkg-dir` for external package extraction. No cache,
+   install or `zig-pkg` output enters the snapshot (checked for mutation afterward).
 4. Audits the **actual fetched tar.gz**: exact required file membership and bytes,
    hash prefix, no absolute/traversal/backslash/drive-ambiguous paths, links,
    special files, duplicate files or unexpected directories. Budgets: 128 members,
    1 MiB per file, 8 MiB archive/expanded/source totals. Expected sources exclude
    SDK/runtimes/binaries, caches, reports, credentials and local editor configs.
    The checker writes only validated member bytes, not `extractall`.
-5. Runs relocated ReleaseFast aggregate tests plus smoke compile/install with
+5. Runs relocated `fast` aggregate tests plus smoke compile/install with
    fresh external caches. Separately builds an external consumer using a local
    archive URL and the **computed Zig package hash**, with another fresh cache.
    Only the in-package consumer fixture uses a sibling path dependency.
@@ -200,7 +202,7 @@ python3 tests/offline/check.py --sdk "$STEAMWORKS_SDK" \
 
 Each prefix must contain at least one of the installed smoke/tutorial/consumer executables
 under `bin`. The same source allowlist audit still runs; `deployment.json` records
-source hashes and checked artifacts. Use separate Debug and ReleaseFast installs.
+source hashes and checked artifacts. Use separate `debug` and `fast` installs.
 Do not use this focused mode as a substitute for the full source/package check.
 
 Limits: this is a bounded audit of trusted owned source, **not** a general archive
@@ -219,8 +221,8 @@ trigger may be added to SDK-bearing runners. Protect main and restrict workflow
 changes/dispatch to trusted maintainers before provisioning or execution.
 
 The user must supply an isolated trusted self-hosted **macOS ARM64** runner with
-labels `steamworkz-sdk-165` and `zig-0-16-0` (plus the standard self-hosted/macOS/ARM64
-labels), Zig 0.16.0, Python 3.9+, Git, Bash, standard macOS process tools, and the
+labels `steamworkz-sdk-165` and `zig-0-17-0` (plus the standard self-hosted/macOS/ARM64
+labels), Zig 0.17.0, Python 3.9+, Git, Bash, standard macOS process tools, and the
 external read-only SDK. Set `STEAMWORKS_SDK` and `STEAMWORKZ_PRIVATE_ROOT` in the
 runner environment; the latter is a precreated private runner-local directory
 outside the checkout and SDK, not a hosted artifact area. Before creating a work

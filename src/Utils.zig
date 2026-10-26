@@ -4,9 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Context = @import("Context.zig");
 const SteamId = @import("types.zig").SteamId;
-const c = @cImport({
-    @cInclude("utils.h");
-});
+const c = @import("steamworkz_c");
 const native = if (builtin.is_test) Fake else c;
 const Utils = @This();
 
@@ -68,7 +66,7 @@ pub fn showGamepad(self: Utils, options: GamepadOptions) !bool {
     try string(options.description);
     try string(options.existing_text);
     var app_id: u32 = 0;
-    const accepted = try boolean(native.sw_utils_show_gamepad(@intFromEnum(options.mode), @intFromEnum(options.lines), options.description.ptr, options.max_characters, options.existing_text.ptr, &app_id));
+    const accepted = try boolean(native.sw_utils_show_gamepad(@backingInt(options.mode), @backingInt(options.lines), options.description.ptr, options.max_characters, options.existing_text.ptr, &app_id));
     if (accepted) {
         self.lease.context.keyboard_state = .gamepad;
         self.lease.context.keyboard_app_id = app_id;
@@ -84,7 +82,7 @@ pub fn showFloating(self: Utils, options: FloatingOptions) !bool {
     self.lease.check();
     if (self.lease.context.keyboard_state != .none) return error.KeyboardPending;
     if (options.width <= 0 or options.height <= 0) return error.InvalidRectangle;
-    const accepted = try boolean(native.sw_utils_show_floating(@intFromEnum(options.mode), options.x, options.y, options.width, options.height));
+    const accepted = try boolean(native.sw_utils_show_floating(@backingInt(options.mode), options.x, options.y, options.width, options.height));
     if (accepted) self.lease.context.keyboard_state = .floating;
     return accepted;
 }
@@ -125,7 +123,7 @@ pub fn filterText(self: Utils, options: FilterOptions, input: [:0]const u8, outp
     // An unwritten native output must not appear terminated due to old zeroes.
     @memset(output, 0x7f);
     var filtered_characters: i32 = 0;
-    try status(native.sw_utils_filter(@intFromEnum(options.context), @intFromEnum(options.source), input.ptr, output.ptr, capacity, &filtered_characters));
+    try status(native.sw_utils_filter(@backingInt(options.context), @backingInt(options.source), input.ptr, output.ptr, capacity, &filtered_characters));
     const length = std.mem.indexOfScalar(u8, output, 0) orelse return error.MalformedNativeOutput;
     return .{ .filtered_characters = filtered_characters, .text = output[0..length] };
 }
@@ -136,7 +134,7 @@ pub fn defaultConfig(self: Utils) !DefaultConfig {
     self.lease.check();
     var value: i32 = 0;
     try status(native.sw_utils_default_config(&value));
-    return @enumFromInt(value);
+    return @fromBackingInt(@intCast(value));
 }
 
 /// Internal Client hook, called while the lease is live and before native shutdown.
@@ -331,7 +329,7 @@ test "Utils validates text rectangles capacity and overlap before native calls" 
     try std.testing.expectError(error.InvalidUtf8, utils.showGamepad(.{ .max_characters = 1, .existing_text = "\xff" }));
     try std.testing.expectError(error.InvalidRectangle, utils.showFloating(.{ .x = -1, .y = 0, .width = 0, .height = 1 }));
     try std.testing.expectError(error.InvalidRectangle, utils.showFloating(.{ .x = -1, .y = 0, .width = 1, .height = -1 }));
-    const options: FilterOptions = .{ .context = .chat, .source = @enumFromInt(123456) };
+    const options: FilterOptions = .{ .context = .chat, .source = @fromBackingInt(@intCast(123456)) };
     var output: [8]u8 = undefined;
     try std.testing.expectError(error.BufferTooSmall, utils.filterText(options, "é!!", output[0..4]));
     try std.testing.expectError(error.InteriorNul, utils.filterText(options, "a\x00b", &output));
@@ -361,7 +359,7 @@ test "Utils filtering preserves signed characters bytes availability and unknown
     try std.testing.expect(try utils.initFilter());
     Fake.result = 0;
     try std.testing.expect(!try utils.initFilter());
-    const options: FilterOptions = .{ .context = .chat, .source = @enumFromInt(123456) };
+    const options: FilterOptions = .{ .context = .chat, .source = @fromBackingInt(@intCast(123456)) };
     var output: [8]u8 = @splat(0);
     const result = try utils.filterText(options, "é!!", &output);
     try std.testing.expectEqual(@as(i32, -3), result.filtered_characters);
@@ -371,7 +369,7 @@ test "Utils filtering preserves signed characters bytes availability and unknown
     try std.testing.expectError(error.MalformedNativeOutput, utils.filterText(options, "é!!", &output));
     try std.testing.expectEqual(DefaultConfig.steam_frame, try utils.defaultConfig());
     Fake.config = 12345;
-    try std.testing.expectEqual(@as(i32, 12345), @intFromEnum(try utils.defaultConfig()));
+    try std.testing.expectEqual(@as(i32, 12345), @backingInt(try utils.defaultConfig()));
     Fake.result = -1;
     try std.testing.expectError(error.Unavailable, utils.initFilter());
     try std.testing.expectError(error.Unavailable, utils.filterText(options, "é!!", &output));
@@ -393,6 +391,6 @@ test "Utils owned gamepad text distinguishes empty success and cancellation" {
     try std.testing.expect(value.text() == null);
     try std.testing.expectEqual(@as(usize, c.SW_UTILS_TEXT_CAPACITY), GamepadText.capacity);
     inline for (.{ .{ GamepadText.Status.canceled, c.SW_UTILS_TEXT_CANCELED }, .{ GamepadText.Status.complete, c.SW_UTILS_TEXT_COMPLETE }, .{ GamepadText.Status.too_large, c.SW_UTILS_TEXT_TOO_LARGE }, .{ GamepadText.Status.unavailable, c.SW_UTILS_TEXT_UNAVAILABLE }, .{ GamepadText.Status.retrieval_failed, c.SW_UTILS_TEXT_RETRIEVAL_FAILED }, .{ GamepadText.Status.malformed, c.SW_UTILS_TEXT_MALFORMED } }) |pair| {
-        try std.testing.expectEqual(@as(i32, pair[1]), @intFromEnum(pair[0]));
+        try std.testing.expectEqual(@as(i32, pair[1]), @backingInt(pair[0]));
     }
 }

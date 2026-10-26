@@ -7,9 +7,7 @@ const Context = @import("Context.zig");
 const types = @import("types.zig");
 const Session = types.RemotePlaySession;
 const SteamId = types.SteamId;
-const c = @cImport({
-    @cInclude("remote_play.h");
-});
+const c = @import("steamworkz_c");
 const native = if (builtin.is_test) Fake else c;
 const RemotePlay = @This();
 
@@ -42,14 +40,14 @@ pub fn sessionAt(self: RemotePlay, index: usize) !Session {
     if (index > std.math.maxInt(c_int)) return error.IndexTooLarge;
     var session: u32 = 0;
     try status(native.sw_remote_play_session_id(@intCast(index), &session));
-    return @enumFromInt(session);
+    return @fromBackingInt(@intCast(session));
 }
 
 /// ISteamRemotePlay::BSessionRemotePlayTogether, not a connection-liveness test.
 pub fn isTogether(self: RemotePlay, session: Session) !bool {
     self.lease.check();
     try validSession(session);
-    return boolean(native.sw_remote_play_together(@intFromEnum(session)));
+    return boolean(native.sw_remote_play_together(@backingInt(session)));
 }
 
 /// ISteamRemotePlay::GetSessionSteamID; preserves native identities, including
@@ -58,8 +56,8 @@ pub fn steamId(self: RemotePlay, session: Session) !SteamId {
     self.lease.check();
     try validSession(session);
     var value: u64 = 0;
-    try status(native.sw_remote_play_steam_id(@intFromEnum(session), &value));
-    return @enumFromInt(value);
+    try status(native.sw_remote_play_steam_id(@backingInt(session), &value));
+    return @fromBackingInt(@intCast(value));
 }
 
 /// Zero means invalid/disappeared session OR a non-guest. No guest error inferred.
@@ -67,7 +65,7 @@ pub fn guestId(self: RemotePlay, session: Session) !u32 {
     self.lease.check();
     try validSession(session);
     var value: u32 = 0;
-    try status(native.sw_remote_play_guest_id(@intFromEnum(session), &value));
+    try status(native.sw_remote_play_guest_id(@backingInt(session), &value));
     return value;
 }
 
@@ -79,7 +77,7 @@ pub fn clientName(self: RemotePlay, session: Session, output: []u8) !ClientName 
     try validSession(session);
     var required: u32 = 0;
     var copied: u32 = 0;
-    const result = native.sw_remote_play_client_name(@intFromEnum(session), output.ptr, output.len, &required, &copied);
+    const result = native.sw_remote_play_client_name(@backingInt(session), output.ptr, output.len, &required, &copied);
     switch (result) {
         0 => {
             if (copied != required or copied >= 1024 or copied > output.len) return error.MalformedNativeOutput;
@@ -103,8 +101,8 @@ pub fn formFactor(self: RemotePlay, session: Session) !FormFactor {
     self.lease.check();
     try validSession(session);
     var value: i32 = 0;
-    try status(native.sw_remote_play_form_factor(@intFromEnum(session), &value));
-    return @enumFromInt(value);
+    try status(native.sw_remote_play_form_factor(@backingInt(session), &value));
+    return @fromBackingInt(@intCast(value));
 }
 
 /// Preserves the native boolean and signed dimensions independently, including
@@ -114,7 +112,7 @@ pub fn resolution(self: RemotePlay, session: Session) !Resolution {
     try validSession(session);
     var width: i32 = 0;
     var height: i32 = 0;
-    const available = try boolean(native.sw_remote_play_resolution(@intFromEnum(session), &width, &height));
+    const available = try boolean(native.sw_remote_play_resolution(@backingInt(session), &width, &height));
     return .{ .available = available, .width = width, .height = height };
 }
 
@@ -131,7 +129,7 @@ pub fn showTogetherUi(self: RemotePlay) !bool {
 pub fn invite(self: RemotePlay, target: InviteTarget) !bool {
     self.lease.check();
     const friend_id: u64 = switch (target) {
-        .friend => |id| if (id == .invalid) return error.InvalidFriend else @intFromEnum(id),
+        .friend => |id| if (id == .invalid) return error.InvalidFriend else @backingInt(id),
         .guest => 0,
     };
     return boolean(native.sw_remote_play_invite(friend_id));
@@ -254,18 +252,18 @@ test "RemotePlay snapshots preserve disappearing sessions and ambiguous values" 
     defer context.release();
     Fake.reset();
     const remote: RemotePlay = .{ .lease = context.lease() };
-    const session: Session = @enumFromInt(73);
+    const session: Session = @fromBackingInt(@intCast(73));
     try std.testing.expectEqual(@as(u32, 1), try remote.sessionCount());
     try std.testing.expectEqual(session, try remote.sessionAt(0));
     Fake.session_value = 0;
     try std.testing.expectEqual(Session.invalid, try remote.sessionAt(std.math.maxInt(c_int)));
     try std.testing.expectEqual(std.math.maxInt(c_int), Fake.last_index);
     try std.testing.expect(try remote.isTogether(session));
-    try std.testing.expectEqual(std.math.maxInt(u64), @intFromEnum(try remote.steamId(session)));
+    try std.testing.expectEqual(std.math.maxInt(u64), @backingInt(try remote.steamId(session)));
     try std.testing.expectEqual(@as(u32, 0), try remote.guestId(session));
     for ([_]i32{ 6, -1, std.math.minInt(i32), std.math.maxInt(i32) }) |value| {
         Fake.form = value;
-        try std.testing.expectEqual(value, @intFromEnum(try remote.formFactor(session)));
+        try std.testing.expectEqual(value, @backingInt(try remote.formFactor(session)));
     }
     try std.testing.expectEqual(Resolution{ .available = true, .width = -7, .height = 0 }, try remote.resolution(session));
     Fake.bool_result = 0;
@@ -301,7 +299,7 @@ test "RemotePlay unavailable interface maps every method without Steam" {
     Fake.bool_result = -1;
     Fake.name_result = -1;
     const remote: RemotePlay = .{ .lease = context.lease() };
-    const session: Session = @enumFromInt(73);
+    const session: Session = @fromBackingInt(@intCast(73));
     try std.testing.expectError(error.Unavailable, remote.sessionCount());
     try std.testing.expectError(error.Unavailable, remote.sessionAt(0));
     try std.testing.expectError(error.Unavailable, remote.isTogether(session));
@@ -322,13 +320,13 @@ test "RemotePlay invitation targets and explicit UI retain native rejection" {
     Fake.reset();
     const remote: RemotePlay = .{ .lease = context.lease() };
     try std.testing.expect(try remote.showTogetherUi());
-    try std.testing.expect(try remote.invite(.{ .friend = @enumFromInt(123456) }));
+    try std.testing.expect(try remote.invite(.{ .friend = @fromBackingInt(@intCast(123456)) }));
     try std.testing.expectEqual(@as(u64, 123456), Fake.last_friend);
     try std.testing.expect(try remote.invite(.guest));
     try std.testing.expectEqual(@as(u64, 0), Fake.last_friend);
     Fake.bool_result = 0;
     try std.testing.expect(!try remote.showTogetherUi());
-    try std.testing.expect(!try remote.invite(.{ .friend = @enumFromInt(123456) }));
+    try std.testing.expect(!try remote.invite(.{ .friend = @fromBackingInt(@intCast(123456)) }));
     try std.testing.expect(!try remote.invite(.guest));
     Fake.bool_result = 2;
     try std.testing.expectError(error.MalformedNativeOutput, remote.showTogetherUi());
@@ -340,7 +338,7 @@ test "RemotePlay copied client name distinguishes empty absent long and short" {
     defer context.release();
     Fake.reset();
     const remote: RemotePlay = .{ .lease = context.lease() };
-    const session: Session = @enumFromInt(73);
+    const session: Session = @fromBackingInt(@intCast(73));
     var output: [3]u8 = @splat(0x7f);
     const name = try remote.clientName(session, &output);
     try std.testing.expectEqual(.complete, name.status);

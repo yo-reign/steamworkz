@@ -10,7 +10,8 @@ The project, Zig dependency key, and exported module are named `steamworkz`.
 Valve's product and API names remain Steamworks.
 Factual third-party repository URLs and historical commit subjects must not be renamed.
 
-Target baseline: Zig 0.16.0 and Steamworks SDK 1.65.
+Target baseline: Zig 0.17.0 and Steamworks SDK 1.65.
+Earlier 0.16 validation records remain historical. See CHECKPOINT.md for migration evidence and publication status.
 Supported build targets: macOS arm64/x86_64, Linux x86_64 with glibc, and Windows x86_64.
 Windows GNU is the verified cross-compilation target.
 

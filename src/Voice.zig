@@ -6,9 +6,7 @@
 //! https://partner.steamgames.com/doc/api/ISteamUser
 const std = @import("std");
 const Context = @import("Context.zig");
-const c = @cImport({
-    @cInclude("voice.h");
-});
+const c = @import("steamworkz_c");
 const native = if (@import("builtin").is_test) TestApi else c;
 const Voice = @This();
 
@@ -96,7 +94,7 @@ pub fn available(self: Voice) Error!Available {
     var result: i32 = 0;
     var bytes: u32 = 0;
     try status(native.sw_voice_available(&result, &bytes));
-    return .{ .result = @enumFromInt(result), .compressed_bytes = bytes };
+    return .{ .result = @fromBackingInt(@intCast(result)), .compressed_bytes = bytes };
 }
 /// ISteamUser::GetVoice reads compressed data only. Inspect result and
 /// malformed_count before using data. Explicit read in any state, including
@@ -107,7 +105,7 @@ pub fn read(self: Voice, destination: []u8) Error!Compressed {
     var result: i32 = 0;
     var bytes: u32 = 0;
     try status(native.sw_voice_read(destination.ptr, capacity, &result, &bytes));
-    const value: Result = @enumFromInt(result);
+    const value: Result = @fromBackingInt(@intCast(result));
     if (value == .not_recording) self.lease.context.voice_state = .inactive;
     const malformed = value == .ok and bytes > capacity;
     return .{
@@ -129,7 +127,7 @@ pub fn decode(self: Voice, compressed: []const u8, destination: []i16, sample_ra
     var result: i32 = 0;
     var bytes: u32 = 0;
     try status(native.sw_voice_decode(compressed.ptr, input_bytes, destination.ptr, capacity, sample_rate, &result, &bytes));
-    const value: Result = @enumFromInt(result);
+    const value: Result = @fromBackingInt(@intCast(result));
     const malformed = value == .ok and (bytes > capacity or bytes % @sizeOf(i16) != 0);
     return .{
         .result = value,
@@ -246,10 +244,10 @@ test "Voice lifecycle shares copied state and drains only on read NotRecording" 
     try std.testing.expectEqual(.already_draining, try voice.stop());
     try std.testing.expectError(error.Draining, voice.start());
     try std.testing.expectEqual(@as(usize, 2), TestApi.calls);
-    TestApi.result = @intFromEnum(Result.no_data);
+    TestApi.result = @backingInt(Result.no_data);
     try std.testing.expectEqual(Result.no_data, (try voice.read(&out)).result);
     try std.testing.expectEqual(.draining, copy.state());
-    TestApi.result = @intFromEnum(Result.not_recording);
+    TestApi.result = @backingInt(Result.not_recording);
     try std.testing.expectEqual(Result.not_recording, (try copy.available()).result);
     try std.testing.expectEqual(.draining, voice.state());
     try std.testing.expectEqual(Result.not_recording, (try copy.read(&out)).result);
@@ -302,10 +300,10 @@ test "Voice raw counts and unknown results never publish native failures or malf
         const available_bytes = try voice.available();
         const compressed = try voice.read(&out);
         const decoded = try voice.decode(&out, &pcm, 24000);
-        try std.testing.expectEqual(result, @intFromEnum(available_bytes.result));
+        try std.testing.expectEqual(result, @backingInt(available_bytes.result));
         try std.testing.expectEqual(TestApi.count, available_bytes.compressed_bytes);
-        try std.testing.expectEqual(result, @intFromEnum(compressed.result));
-        try std.testing.expectEqual(result, @intFromEnum(decoded.result));
+        try std.testing.expectEqual(result, @backingInt(compressed.result));
+        try std.testing.expectEqual(result, @backingInt(decoded.result));
         try std.testing.expectEqual(TestApi.count, compressed.bytes_written);
         try std.testing.expectEqual(TestApi.count, decoded.bytes_written);
         try std.testing.expect(compressed.data == null and decoded.data == null);

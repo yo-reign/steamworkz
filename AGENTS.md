@@ -2,7 +2,7 @@
 
 ## Source and distribution
 
-- Target Zig 0.16.0 and the user-supplied official Steamworks SDK 1.65.
+- Target Zig 0.17.0 and the user-supplied official Steamworks SDK 1.65.
 - Never copy SDK headers, libraries, archives, runtime binaries, or SDK directories into versioned source or package archives.
 - Use an external `-Dsdk` option or `STEAMWORKS_SDK`. Do not download the SDK or commit machine-specific paths.
 - Keep SDK adaptation in the private C/C++ bridge compiled by Zig. Public game code must use Zig APIs only.

@@ -27,7 +27,7 @@ fn runSession(io: std.Io, allocator: std.mem.Allocator, client: *steam.Client) !
     try start(client);
     defer client.deinit();
     try require(client.loggedOn());
-    std.debug.print("Steam initialized: app={d}, persona_available={}\n", .{ @intFromEnum(client.appId()), client.friends().personaName().len != 0 });
+    std.debug.print("Steam initialized: app={d}, persona_available={}\n", .{ @backingInt(client.appId()), client.friends().personaName().len != 0 });
     var name_buffer: [256]u8 = undefined;
     const copied_name = try client.friends().personaNameCopy(&name_buffer);
     const owned_name = try client.friends().personaNameAlloc(allocator);
@@ -72,7 +72,7 @@ fn socketChecks(io: std.Io, client: *steam.Client) !void {
         const native = try net.parseAddress(literal);
         try require(pure.port == native.port and std.mem.eql(u8, &pure.ipv6, &native.ipv6));
         var text: [steam.Networking.address_text_size]u8 = undefined;
-        const formatted = try std.fmt.bufPrintZ(&text, "{f}", .{pure});
+        const formatted = try std.mem.printSentinel(&text, "{f}", .{pure}, 0);
         const roundtrip = try net.parseAddress(formatted);
         try require(pure.port == roundtrip.port and std.mem.eql(u8, &pure.ipv6, &roundtrip.ipv6));
     }
@@ -103,7 +103,7 @@ fn requireSend(outcome: steam.Networking.SendOutcome) error{SendRejected}!i64 {
     return switch (outcome) {
         .accepted => |number| number,
         .rejected => |result| {
-            std.debug.print("Steam rejected the send: result {d}\n", .{@intFromEnum(result)});
+            std.debug.print("Steam rejected the send: result {d}\n", .{@backingInt(result)});
             return error.SendRejected;
         },
     };
@@ -142,7 +142,7 @@ fn lobbyCheck(io: std.Io, allocator: std.mem.Allocator, client: *steam.Client) !
                 joined = event.payload.lobby_entered.lobby;
             if (try request.take(&event)) |created| {
                 if (created.result != .ok) {
-                    std.debug.print("Steam rejected lobby creation: result {d}\n", .{@intFromEnum(created.result)});
+                    std.debug.print("Steam rejected lobby creation: result {d}\n", .{@backingInt(created.result)});
                     return error.LobbyRequestFailed;
                 }
                 joined = created.lobby;

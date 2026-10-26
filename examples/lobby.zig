@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
             if (completion) |created| {
                 // Retrieval succeeded. The native operation may still have failed.
                 if (created.result != .ok) {
-                    std.debug.print("Lobby creation rejected: Steam result {d}\n", .{@intFromEnum(created.result)});
+                    std.debug.print("Lobby creation rejected: Steam result {d}\n", .{@backingInt(created.result)});
                     failure = error.LobbyRejected;
                 } else if (created.lobby == .invalid) {
                     failure = error.InvalidLobbyResult;

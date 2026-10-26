@@ -241,7 +241,7 @@ def main():
     records = []
     env = os.environ.copy()
     # A caller's Zig overrides must not redirect outputs back into package inputs.
-    for key in ("ZIG_LOCAL_CACHE_DIR", "ZIG_GLOBAL_CACHE_DIR", "ZIG_BUILD_RUNNER"):
+    for key in ("ZIG_LOCAL_CACHE_DIR", "ZIG_GLOBAL_CACHE_DIR", "ZIG_LOCAL_PKG_DIR", "ZIG_BUILD_RUNNER"):
         env.pop(key, None)
 
     def run(label, command, cwd, run_env=None, expect_success=True):
@@ -255,7 +255,7 @@ def main():
         return log.read_text()
 
     version = run("zig-version", [args.zig, "version"], evidence).strip()
-    require(version == "0.16.0", "Zig 0.16.0 required")
+    require(version == "0.17.0", "Zig 0.17.0 required")
     require((sdk / "public/steam/steam_api.h").is_file(), "SDK public headers missing")
     files = read_sources(root)
     if args.linux_install:
@@ -279,16 +279,15 @@ def main():
     snapshot, driver = evidence / "snapshot", evidence / "driver"
     snapshot.mkdir()
     driver.mkdir()
-    # Zig 0.16 fetch locates a project even without --save. Keep that driver and
-    # its zig-pkg output entirely outside the source snapshot being fetched.
-    (driver / "build.zig").write_text('pub fn build(_: *@import("std").Build) void {}\n')
-    (driver / "build.zig.zon").write_text('.{ .name = .steamworkz_consumer, .version = "0.0.0", .fingerprint = 0x295e56848c2e3165, .paths = .{"build.zig", "build.zig.zon"} }\n')
+    # Zig 0.17 fetch without --save needs no driver project and writes globally.
+    # Keep the invoking directory and cache outside the source snapshot.
     for name, data in files.items():
         path = snapshot / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
     fetch_cache = evidence / "fetch-cache"
-    package_hash = run("fetch", [args.zig, "fetch", "--global-cache-dir", str(fetch_cache), str(snapshot)], driver).strip()
+    package_hash = run("fetch", [args.zig, "fetch", str(snapshot)], driver,
+                       {**env, "ZIG_GLOBAL_CACHE_DIR": str(fetch_cache)}).strip()
     require(re.fullmatch(r"steamworkz-0\.1\.0-[A-Za-z0-9_-]+", package_hash), "unexpected fetch hash")
     archive = fetch_cache / "p" / (package_hash + ".tar.gz")
     package = audit_archive(archive, package_hash, files)
@@ -299,13 +298,14 @@ def main():
         path = relocated / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-    common = ["-Dsdk=" + str(sdk), "-Doptimize=ReleaseFast", "-j2", "--summary", "all"]
+    common = ["-Dsdk=" + str(sdk), "-Doptimize=fast", "-j2", "--summary", "all"]
     # Launch outside the package root. Nested builds must preserve cache paths
     # relative to the invoking process, not reinterpret them relative to build.zig.
     run("relocated-test-install", [args.zig, "build", "test", "install", "examples", *common,
         "--build-file", str(relocated / "build.zig"),
-        "--cache-dir", str(evidence / "relocated-cache"), "--global-cache-dir", str(evidence / "relocated-global"),
-        "--prefix", str(evidence / "relocated-install")], evidence)
+        "--cache-dir", str(evidence / "relocated-cache"), "--pkg-dir", str(evidence / "relocated-pkg"),
+        "--prefix", str(evidence / "relocated-install")], evidence,
+        {**env, "ZIG_GLOBAL_CACHE_DIR": str(evidence / "relocated-global")})
     require({p.relative_to(relocated).as_posix(): p.read_bytes() for p in relocated.rglob("*") if p.is_file()} == package,
             "relocated build wrote into package sources")
     consumer = evidence / "consumer"
@@ -322,8 +322,9 @@ def main():
             data = data.replace(old, ('.url = "' + archive.as_uri() + '", .hash = "' + package_hash + '"').encode())
         (consumer / name).write_bytes(data)
     run("archive-consumer", [args.zig, "build", "install", "check-negative", *common,
-        "--cache-dir", str(evidence / "consumer-cache"), "--global-cache-dir", str(evidence / "consumer-global"),
-        "--prefix", str(evidence / "consumer-install")], consumer)
+        "--cache-dir", str(evidence / "consumer-cache"), "--pkg-dir", str(evidence / "consumer-pkg"),
+        "--prefix", str(evidence / "consumer-install")], consumer,
+        {**env, "ZIG_GLOBAL_CACHE_DIR": str(evidence / "consumer-global")})
     host = platform.system()
     runtime_dir, runtime_name = {"Darwin": ("osx", "libsteam_api.dylib"), "Linux": ("linux64", "libsteam_api.so"),
                                  "Windows": ("win64", "steam_api64.dll")}[host]

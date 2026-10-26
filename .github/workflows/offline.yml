@@ -9,7 +9,7 @@ permissions:
 jobs:
   offline:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'yo-reign/steamworkz' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, macOS, ARM64, steamworkz-sdk-165, zig-0-16-0]
+    runs-on: [self-hosted, macOS, ARM64, steamworkz-sdk-165, zig-0-17-0]
     timeout-minutes: 60
     steps:
       # No third-party actions, credential persistence, caches or artifact uploads.
@@ -48,7 +48,8 @@ jobs:
           set +e
           (
             set -euo pipefail
-            test "$(zig version)" = 0.16.0
+            test "$(zig version)" = 0.17.0
+            export ZIG_GLOBAL_CACHE_DIR="$work/global"
             test -d "$STEAMWORKS_SDK/public"
             export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
             export GIT_TERMINAL_PROMPT=0
@@ -57,11 +58,12 @@ jobs:
             git -c credential.helper= fetch --depth=1 https://github.com/yo-reign/steamworkz.git "$TRUSTED_REVISION"
             git checkout --detach FETCH_HEAD
             test "$(git rev-parse HEAD)" = "$TRUSTED_REVISION"
-            for mode in Debug ReleaseSafe ReleaseFast ReleaseSmall; do
-              zig build test -Dsdk="$STEAMWORKS_SDK" -Doptimize="$mode" --cache-dir "$work/cache" --global-cache-dir "$work/global" --summary all > "$work/test-$mode.log" 2>&1
+            zig fmt --check build.zig build.zig.zon src examples tests/lifecycle_runner.zig tests/consumer
+            for mode in debug safe fast small; do
+              zig build test -Dsdk="$STEAMWORKS_SDK" -Doptimize="$mode" -j2 --cache-dir "$work/cache" --pkg-dir "$work/packages" --summary all > "$work/test-$mode.log" 2>&1
             done
             for target in aarch64-macos x86_64-macos x86_64-linux-gnu x86_64-windows-gnu; do
-              zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Doptimize=ReleaseFast -Dtarget="$target" --cache-dir "$work/cache" --global-cache-dir "$work/global" --summary all > "$work/compile-$target.log" 2>&1
+              zig build test-compile -Dsdk="$STEAMWORKS_SDK" -Doptimize=fast -Dtarget="$target" -j2 --cache-dir "$work/cache" --pkg-dir "$work/packages" --summary all > "$work/compile-$target.log" 2>&1
             done
             python3 tests/offline/check.py --sdk "$STEAMWORKS_SDK" --evidence "$work/package" --run-consumer
             git diff --check
@@ -69,7 +71,7 @@ jobs:
           ) > "$work/ci.log" 2>&1
           result=$?
           if [[ "$result" -eq 0 ]]; then
-            printf '%s\n' 'PASS: trusted offline checks (Zig 0.16.0); evidence retained privately'
+            printf '%s\n' 'PASS: trusted offline checks (Zig 0.17.0); evidence retained privately'
           else
             printf '%s\n' 'FAIL: offline checks; authorized maintainer must inspect runner-local evidence'
             exit 1

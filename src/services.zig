@@ -6,10 +6,7 @@ const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
 const Request = @import("requests.zig").Request;
-const c = @cImport({
-    @cInclude("services.h");
-    @cInclude("core.h");
-});
+const c = @import("steamworkz_c");
 const SteamId = types.SteamId;
 const AppId = types.AppId;
 
@@ -94,14 +91,14 @@ pub const Friends = struct {
         self.lease.check();
         const user = c.sw_friend_at(i);
         if (user == 0) return error.InvalidIndex;
-        return @enumFromInt(user);
+        return @fromBackingInt(@intCast(user));
     }
     /// ISteamFriends::GetFriendPersonaName: cached UTF-8 name; not proof of friendship.
     /// Names may arrive asynchronously (requestUser / persona_changed). Borrows SDK
     /// storage until the next Steam call/pump/close; retain via friendNameCopy/Alloc.
     pub fn friendName(self: Friends, user: SteamId) []const u8 {
         self.lease.check();
-        return borrowed(c.sw_friend_name(@intFromEnum(user)));
+        return borrowed(c.sw_friend_name(@backingInt(user)));
     }
     /// Copies the full name into caller storage, without a terminator or truncation.
     pub fn friendNameCopy(self: Friends, user: SteamId, buffer: []u8) error{BufferTooSmall}![]u8 {
@@ -115,14 +112,14 @@ pub const Friends = struct {
     /// Offline can also mean Steam has no state information for this user.
     pub fn state(self: Friends, user: SteamId) PersonaState {
         self.lease.check();
-        return @enumFromInt(c.sw_friend_state(@intFromEnum(user)));
+        return @fromBackingInt(@intCast(c.sw_friend_state(@backingInt(user))));
     }
     /// ISteamFriends::RequestUserInformation. True starts a fetch; wait for
     /// PersonaStateChange_t (persona_changed) for this user. False can mean cached
     /// data. name_only avoids an avatar download; no typed Request is returned.
     pub fn requestUser(self: Friends, user: SteamId, options: UserInfoOptions) bool {
         self.lease.check();
-        return c.sw_request_user(@intFromEnum(user), @intFromBool(options.name_only)) != 0;
+        return c.sw_request_user(@backingInt(user), @intFromBool(options.name_only)) != 0;
     }
     /// ISteamFriends::SetRichPresence publishes local presence. A null value removes
     /// one key. Steam limits keys to 63 and values to 255 bytes (excluding NUL).
@@ -147,7 +144,7 @@ pub const Friends = struct {
     pub fn presence(self: Friends, user: SteamId, key: [:0]const u8) ![]const u8 {
         try name(key);
         self.lease.check();
-        return borrowed(c.sw_friend_presence(@intFromEnum(user), key.ptr));
+        return borrowed(c.sw_friend_presence(@backingInt(user), key.ptr));
     }
     /// Copies the full value into caller storage, without a terminator or truncation.
     pub fn presenceCopy(self: Friends, user: SteamId, key: [:0]const u8, buffer: []u8) ![]u8 {
@@ -161,14 +158,14 @@ pub const Friends = struct {
     /// (presence_changed) for this user. Void submission, not completion.
     pub fn requestPresence(self: Friends, user: SteamId) void {
         self.lease.check();
-        c.sw_request_presence(@intFromEnum(user));
+        c.sw_request_presence(@backingInt(user));
     }
     /// ISteamFriends::InviteUserToGame sends connect text, not a connection.
     /// Native acceptance does not mean the invitee joined. Use only explicit intent.
     pub fn invite(self: Friends, user: SteamId, connect: [:0]const u8) !void {
         try string(connect);
         self.lease.check();
-        try accepted(c.sw_invite_game(@intFromEnum(user), connect.ptr));
+        try accepted(c.sw_invite_game(@backingInt(user), connect.ptr));
     }
     /// ISteamFriends::ActivateGameOverlay after ISteamUtils::IsOverlayEnabled.
     /// Explicit UI action; OverlayUnavailable means the precheck failed, while
@@ -192,7 +189,7 @@ pub const Friends = struct {
         if (app == .invalid) return error.InvalidApp;
         self.lease.check();
         if (c.sw_overlay_enabled() == 0) return error.OverlayUnavailable;
-        c.sw_open_store(@intFromEnum(app));
+        c.sw_open_store(@backingInt(app));
     }
     /// ISteamFriends::ActivateGameOverlayInviteDialog opens lobby-invite UI;
     /// it does not itself invite anyone. Fails with OverlayUnavailable if disabled.
@@ -200,7 +197,7 @@ pub const Friends = struct {
         if (lobby == .invalid) return error.InvalidLobby;
         self.lease.check();
         if (c.sw_overlay_enabled() == 0) return error.OverlayUnavailable;
-        c.sw_open_invite(@intFromEnum(lobby));
+        c.sw_open_invite(@backingInt(lobby));
     }
     /// ISteamFriends::GetSmallFriendAvatar / GetMediumFriendAvatar / GetLargeFriendAvatar.
     /// No image allocation is owned here. For pending large avatars, wait for
@@ -208,16 +205,16 @@ pub const Friends = struct {
     /// imageSize/readImage; do not assume fixed dimensions.
     pub fn avatar(self: Friends, user: SteamId, size: AvatarSize) Avatar {
         self.lease.check();
-        const image = c.sw_avatar(@intFromEnum(user), @intFromEnum(size));
-        return if (image < 0) .pending else if (image == 0) .none else .{ .image = @enumFromInt(image) };
+        const image = c.sw_avatar(@backingInt(user), @backingInt(size));
+        return if (image < 0) .pending else if (image == 0) .none else .{ .image = @fromBackingInt(@intCast(image)) };
     }
     /// ISteamUtils::GetImageSize; query before allocating caller-owned RGBA storage.
     /// Works for achievement icons too; no avatar dimensions are assumed.
     pub fn imageSize(self: Friends, image: types.ImageHandle) !ImageSize {
-        if (@intFromEnum(image) <= 0) return error.InvalidImage;
+        if (@backingInt(image) <= 0) return error.InvalidImage;
         self.lease.check();
         var size: ImageSize = undefined;
-        try accepted(c.sw_image_size(@intFromEnum(image), &size.width, &size.height));
+        try accepted(c.sw_image_size(@backingInt(image), &size.width, &size.height));
         return size;
     }
     /// ISteamUtils::GetImageRGBA copies tightly packed RGBA8 into caller storage.
@@ -227,7 +224,7 @@ pub const Friends = struct {
         const size = try self.imageSize(image);
         const bytes = try size.rgbaBytes();
         if (buffer.len < bytes) return error.BufferTooSmall;
-        try accepted(c.sw_image_rgba(@intFromEnum(image), buffer.ptr, try types.count(bytes)));
+        try accepted(c.sw_image_rgba(@backingInt(image), buffer.ptr, try types.count(bytes)));
         return size;
     }
 };
@@ -247,17 +244,17 @@ pub const Apps = struct {
     /// ISteamApps::BIsSubscribedApp checks entitlement, not installation.
     pub fn owns(self: Apps, app: AppId) bool {
         self.lease.check();
-        return c.sw_owns_app(@intFromEnum(app)) != 0;
+        return c.sw_owns_app(@backingInt(app)) != 0;
     }
     /// ISteamApps::BIsAppInstalled; installation does not prove ownership.
     pub fn installed(self: Apps, app: AppId) bool {
         self.lease.check();
-        return c.sw_app_installed(@intFromEnum(app)) != 0;
+        return c.sw_app_installed(@backingInt(app)) != 0;
     }
     /// ISteamApps::BIsDlcInstalled checks both ownership and installation of DLC.
     pub fn dlcInstalled(self: Apps, app: AppId) bool {
         self.lease.check();
-        return c.sw_dlc_installed(@intFromEnum(app)) != 0;
+        return c.sw_dlc_installed(@backingInt(app)) != 0;
     }
     pub fn dlcCount(self: Apps) !usize {
         self.lease.check();
@@ -273,14 +270,14 @@ pub const Apps = struct {
         var available: u8 = 0;
         @memset(buffer, 0);
         try accepted(c.sw_dlc_data(i, &app, &available, buffer.ptr, capacity));
-        return .{ .app = @enumFromInt(app), .available = available != 0, .name = types.text(buffer) };
+        return .{ .app = @fromBackingInt(@intCast(app)), .available = available != 0, .name = types.text(buffer) };
     }
     /// ISteamApps::GetDlcDownloadProgress; downloaded and total are byte counts.
     /// Native false becomes OperationFailed, not a zero-progress reading.
     pub fn dlcProgress(self: Apps, app: AppId) !Download {
         self.lease.check();
         var result: Download = undefined;
-        try accepted(c.sw_dlc_progress(@intFromEnum(app), &result.downloaded, &result.total));
+        try accepted(c.sw_dlc_progress(@backingInt(app), &result.downloaded, &result.total));
         return result;
     }
     /// ISteamApps::GetCurrentGameLanguage; borrowed language name, not a locale enum.
@@ -298,7 +295,7 @@ pub const Apps = struct {
     /// ISteamApps::GetAppOwner; license owner may differ from the active user.
     pub fn owner(self: Apps) SteamId {
         self.lease.check();
-        return @enumFromInt(c.sw_app_owner());
+        return @fromBackingInt(@intCast(c.sw_app_owner()));
     }
     /// ISteamApps::GetAppBuildId; current native build identifier, not an AppId.
     pub fn buildId(self: Apps) i32 {
@@ -393,7 +390,7 @@ pub const Stats = struct {
         if (self.lease.context.leaderboard_download_call != 0) return error.DownloadPending;
     }
     fn trackDownload(self: Stats, call: u64) !Request(.leaderboard_entries) {
-        const request = try Request(.leaderboard_entries).init(@enumFromInt(call));
+        const request = try Request(.leaderboard_entries).init(@fromBackingInt(@intCast(call)));
         self.lease.context.leaderboard_download_call = call;
         return request;
     }
@@ -407,7 +404,7 @@ pub const Stats = struct {
         try boundedName(key);
         var image: i32 = 0;
         try available(native.sw_stats_achievement_icon(key.ptr, &image));
-        return @enumFromInt(image);
+        return @fromBackingInt(@intCast(image));
     }
     /// ISteamUserStats::FindLeaderboard; never creates a backend leaderboard.
     /// Take the LeaderboardFindResult_t (leaderboard_found) completion and check
@@ -420,7 +417,7 @@ pub const Stats = struct {
         try leaderboardName(key);
         var call: u64 = 0;
         try available(native.sw_stats_find_leaderboard(key.ptr, &call));
-        return Request(.leaderboard_found).init(@enumFromInt(call));
+        return Request(.leaderboard_found).init(@fromBackingInt(@intCast(call)));
     }
     /// Immediately copies the full SDK name without NUL or truncation.
     pub fn leaderboardMetadata(self: Stats, board: Leaderboard, buffer: []u8) !LeaderboardMetadata {
@@ -430,7 +427,7 @@ pub const Stats = struct {
         self.lease.check();
         try validLeaderboard(board);
         var out: c.sw_stats_leaderboard_metadata = undefined;
-        const status = native.sw_stats_leaderboard_metadata_copy(@intFromEnum(board), buffer.ptr, buffer.len, &out);
+        const status = native.sw_stats_leaderboard_metadata_copy(@backingInt(board), buffer.ptr, buffer.len, &out);
         switch (status) {
             c.SW_STATS_TEXT_OK, c.SW_STATS_TEXT_NULL => {},
             c.SW_STATS_TEXT_UNAVAILABLE => return error.InterfaceUnavailable,
@@ -438,7 +435,7 @@ pub const Stats = struct {
             else => return error.InvalidNativeResult,
         }
         if (out.name_length > buffer.len) return error.InvalidNativeResult;
-        return .{ .name = if (status == c.SW_STATS_TEXT_NULL) null else buffer[0..out.name_length], .entry_count = out.entry_count, .sort = @enumFromInt(out.sort), .display = @enumFromInt(out.display) };
+        return .{ .name = if (status == c.SW_STATS_TEXT_NULL) null else buffer[0..out.name_length], .entry_count = out.entry_count, .sort = @fromBackingInt(@intCast(out.sort)), .display = @fromBackingInt(@intCast(out.display)) };
     }
     /// Must pump/drain completion even if Request is discarded: it does not
     /// cancel or clear the session slot. Uncertain native cleanup blocks further
@@ -452,7 +449,7 @@ pub const Stats = struct {
         try validLeaderboard(board);
         const range = try windowRange(window);
         var call: u64 = 0;
-        try available(native.sw_stats_download(@intFromEnum(board), range.around, range.first, range.last, &call));
+        try available(native.sw_stats_download(@backingInt(board), range.around, range.first, range.last, &call));
         return self.trackDownload(call);
     }
     /// 1..100 exact IDs, including duplicates/invalid IDs for SDK validation.
@@ -466,9 +463,9 @@ pub const Stats = struct {
         try validLeaderboard(board);
         if (users.len == 0 or users.len > 100) return error.InvalidUserCount;
         var ids: [100]u64 = undefined;
-        for (users, 0..) |user, i| ids[i] = @intFromEnum(user);
+        for (users, 0..) |user, i| ids[i] = @backingInt(user);
         var call: u64 = 0;
-        try available(native.sw_stats_download_users(@intFromEnum(board), &ids, @intCast(users.len), &call));
+        try available(native.sw_stats_download_users(@backingInt(board), &ids, @intCast(users.len), &call));
         return self.trackDownload(call);
     }
     /// Explicit persistent action. Native limit: ten uploads per ten minutes,
@@ -483,8 +480,8 @@ pub const Stats = struct {
         try validLeaderboard(board);
         if (options.details.len > 64) return error.TooLarge;
         var call: u64 = 0;
-        try available(native.sw_stats_upload(@intFromEnum(board), @intFromBool(options.method == .force_update), options.score, options.details.ptr, @intCast(options.details.len), &call));
-        const request = try Request(.leaderboard_uploaded).init(@enumFromInt(call));
+        try available(native.sw_stats_upload(@backingInt(board), @intFromBool(options.method == .force_update), options.score, options.details.ptr, @intCast(options.details.len), &call));
+        const request = try Request(.leaderboard_uploaded).init(@fromBackingInt(@intCast(call)));
         self.lease.context.leaderboard_upload_call = call;
         return request;
     }
@@ -498,7 +495,7 @@ pub const Stats = struct {
         self.lease.check();
         var call: u64 = 0;
         try available(native.sw_stats_request_global_percentages(&call));
-        return Request(.global_percentages_ready).init(@enumFromInt(call));
+        return Request(.global_percentages_ready).init(@fromBackingInt(@intCast(call)));
     }
     /// Wait for a successful request before reading. No readiness cache or
     /// stable snapshot is promised. Each read performs exactly one native step.
@@ -510,9 +507,9 @@ pub const Stats = struct {
     }
     fn percentageStepWith(self: Stats, comptime native: type, previous: ?PercentageIterator) !PercentageStep {
         self.lease.check();
-        if (previous) |cursor| if (@intFromEnum(cursor) < 0) return error.InvalidIterator;
+        if (previous) |cursor| if (@backingInt(cursor) < 0) return error.InvalidIterator;
         var out: c.sw_stats_percentage = undefined;
-        switch (native.sw_stats_percentage_step(@intFromBool(previous == null), if (previous) |cursor| @intFromEnum(cursor) else 0, &out)) {
+        switch (native.sw_stats_percentage_step(@intFromBool(previous == null), if (previous) |cursor| @backingInt(cursor) else 0, &out)) {
             c.SW_STATS_PERCENTAGE_ITEM => {},
             c.SW_STATS_PERCENTAGE_UNAVAILABLE => return error.InterfaceUnavailable,
             c.SW_STATS_PERCENTAGE_END => return .no_data_or_end,
@@ -521,7 +518,7 @@ pub const Stats = struct {
             else => return error.InvalidNativeResult,
         }
         if (out.name_length >= 128 or out.iterator < 0) return error.InvalidNativeResult;
-        return .{ .item = .{ .iterator = @enumFromInt(out.iterator), .name_length = out.name_length, .name_bytes = out.name, .percent = @bitCast(out.percent_bits), .achieved = out.achieved != 0 } };
+        return .{ .item = .{ .iterator = @fromBackingInt(@intCast(out.iterator)), .name_length = out.name_length, .name_bytes = out.name, .percent = @bitCast(out.percent_bits), .achieved = out.achieved != 0 } };
     }
     /// Null means native false, not missing interface. Wait for successful
     /// global percentages request first. Float bits are not clamped.
@@ -634,7 +631,7 @@ pub const Stats = struct {
     /// Steam can evict it later: after stats_unloaded for that user, request again and wait.
     pub fn requestUser(self: Stats, user: SteamId) error{RequestRejected}!Request(.stats_received) {
         self.lease.check();
-        return Request(.stats_received).init(@enumFromInt(c.sw_request_user_stats(@intFromEnum(user))));
+        return Request(.stats_received).init(@fromBackingInt(@intCast(c.sw_request_user_stats(@backingInt(user)))));
     }
     /// Read after a successful stats_received from requestUser.
     /// After stats_unloaded for this user, request again and wait before reading.
@@ -642,7 +639,7 @@ pub const Stats = struct {
         try name(key);
         self.lease.check();
         var value: i32 = 0;
-        try accepted(c.sw_user_stat_int(@intFromEnum(user), key.ptr, &value));
+        try accepted(c.sw_user_stat_int(@backingInt(user), key.ptr, &value));
         return value;
     }
     /// Read after a successful stats_received from requestUser.
@@ -651,7 +648,7 @@ pub const Stats = struct {
         try name(key);
         self.lease.check();
         var value: f32 = 0;
-        try accepted(c.sw_user_stat_float(@intFromEnum(user), key.ptr, &value));
+        try accepted(c.sw_user_stat_float(@backingInt(user), key.ptr, &value));
         return value;
     }
     /// Read after a successful stats_received from requestUser.
@@ -661,7 +658,7 @@ pub const Stats = struct {
         self.lease.check();
         var unlocked: u8 = 0;
         var time: u32 = 0;
-        try accepted(c.sw_user_achievement(@intFromEnum(user), key.ptr, &unlocked, &time));
+        try accepted(c.sw_user_achievement(@backingInt(user), key.ptr, &unlocked, &time));
         return .{ .unlocked = unlocked != 0, .unlocked_at = time };
     }
 };
@@ -714,7 +711,7 @@ pub const Cloud = struct {
             else => return error.InvalidNativeResult,
         }
         if (output.path_length > buffer.len) return error.InvalidNativeResult;
-        return .{ .path = buffer[0..output.path_length], .change = @enumFromInt(output.change), .path_type = @enumFromInt(output.path_type) };
+        return .{ .path = buffer[0..output.path_length], .change = @fromBackingInt(@intCast(output.change)), .path_type = @fromBackingInt(@intCast(output.path_type)) };
     }
 
     pub const BeginWriteBatchError = error{ BatchAlreadyActive, TokenExhausted, InterfaceUnavailable, NativeBatchAlreadyActive };
@@ -816,7 +813,7 @@ pub const Cloud = struct {
         try name(path);
         const size = std.math.cast(u32, bytes.len) orelse return error.TooLarge;
         self.lease.check();
-        return Request(.cloud_written).init(@enumFromInt(c.sw_cloud_write_async(path.ptr, bytes.ptr, size)));
+        return Request(.cloud_written).init(@fromBackingInt(@intCast(c.sw_cloud_write_async(path.ptr, bytes.ptr, size))));
     }
     /// Deletes this one named cloud file. Call only on explicit application intent.
     pub fn delete(self: Cloud, path: [:0]const u8) !void {
@@ -886,14 +883,14 @@ test "invalid typed image handles are rejected before calling Steam" {
     var context: Context = undefined;
     const friends: Friends = .{ .lease = .{ .context = &context, .generation = 0 } };
     try std.testing.expectError(error.InvalidImage, friends.imageSize(.invalid));
-    try std.testing.expectError(error.InvalidImage, friends.imageSize(@enumFromInt(-1)));
+    try std.testing.expectError(error.InvalidImage, friends.imageSize(@fromBackingInt(@intCast(-1))));
 }
 
 test "Friends rejects oversized presence and invalid overlay targets before Steam" {
     var context: Context = undefined;
     const friends: Friends = .{ .lease = .{ .context = &context, .generation = 0 } };
-    try std.testing.expectError(error.TooLarge, friends.setPresence("k" ** 64, null));
-    try std.testing.expectError(error.TooLarge, friends.setPresence("key", "v" ** 256));
+    try std.testing.expectError(error.TooLarge, friends.setPresence(&@as([64:0]u8, @splat('k')), null));
+    try std.testing.expectError(error.TooLarge, friends.setPresence("key", &@as([256:0]u8, @splat('v'))));
     try std.testing.expectError(error.InvalidApp, friends.openStore(.invalid));
     try std.testing.expectError(error.InvalidLobby, friends.openInvite(.invalid));
 }
@@ -962,8 +959,8 @@ test "Cloud local changes preserve signed failure, bounds, copied paths and futu
     const result = try cloud.localChangeAtWith(Native, 0, &buffer);
     try std.testing.expectEqualStrings("abc", result.path);
     try std.testing.expectEqual(buffer[0..].ptr, result.path.ptr);
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(result.change));
-    try std.testing.expectEqual(@as(i32, -7654), @intFromEnum(result.path_type));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(result.change));
+    try std.testing.expectEqual(@as(i32, -7654), @backingInt(result.path_type));
     try std.testing.expectEqual(@as(u8, 0xa5), buffer[3]);
     try std.testing.expectError(error.BufferTooSmall, cloud.localChangeAtWith(Native, 0, buffer[0..2]));
     const cases = .{
@@ -1081,7 +1078,7 @@ test "Stats progression bounds, forwarding and independent session request slots
         }
         fn sw_stats_download_users(board: u64, ids: [*]const u64, n: i32, out: *u64) u8 {
             require(board == 0xf123456789abcdef and n == users.len);
-            for (users, 0..) |id, i| require(ids[i] == @intFromEnum(id));
+            for (users, 0..) |id, i| require(ids[i] == @backingInt(id));
             return call(out);
         }
         fn sw_stats_upload(board: u64, force: u8, score: i32, details: [*]const i32, n: i32, out: *u64) u8 {
@@ -1094,19 +1091,19 @@ test "Stats progression bounds, forwarding and independent session request slots
     try context.claim();
     defer context.release();
     const stats: Stats = .{ .lease = context.lease() };
-    const board: Stats.Leaderboard = @enumFromInt(0xf123456789abcdef);
+    const board: Stats.Leaderboard = @fromBackingInt(@intCast(0xf123456789abcdef));
     const window: Stats.DownloadWindow = .{ .global = .{ .first_rank = 1, .last_rank = 100 } };
     try std.testing.expectEqual(types.ImageHandle.invalid, try stats.achievementIconWith(Native, "name"));
     Native.image = -123;
-    try std.testing.expectEqual(@as(i32, -123), @intFromEnum(try stats.achievementIconWith(Native, "name")));
+    try std.testing.expectEqual(@as(i32, -123), @backingInt(try stats.achievementIconWith(Native, "name")));
     const before_invalid = Native.calls;
     try std.testing.expectError(error.EmptyName, stats.findLeaderboardWith(Native, ""));
     try std.testing.expectError(error.InteriorNul, stats.findLeaderboardWith(Native, "n\x00ame"));
     try std.testing.expectError(error.InvalidUtf8, stats.findLeaderboardWith(Native, "\xff"));
-    try std.testing.expectError(error.TooLarge, stats.findLeaderboardWith(Native, "n" ** 128));
-    try Stats.leaderboardName("n" ** 127);
+    try std.testing.expectError(error.TooLarge, stats.findLeaderboardWith(Native, &@as([128:0]u8, @splat('n'))));
+    try Stats.leaderboardName(&@as([127:0]u8, @splat('n')));
     try Stats.leaderboardName("日本語");
-    try std.testing.expectError(error.TooLarge, stats.achievementIconWith(Native, "n" ** 128));
+    try std.testing.expectError(error.TooLarge, stats.achievementIconWith(Native, &@as([128:0]u8, @splat('n'))));
     try std.testing.expectError(error.InteriorNul, stats.achievementIconWith(Native, "n\x00"));
     try std.testing.expectError(error.InvalidLeaderboard, stats.downloadLeaderboardWith(Native, .invalid, window));
     const invalid_windows = [_]Stats.DownloadWindow{
@@ -1122,12 +1119,12 @@ test "Stats progression bounds, forwarding and independent session request slots
     }
     try std.testing.expectError(error.TooLarge, stats.downloadLeaderboardWith(Native, board, .{ .around_user = .{ .before = 50, .after = 50 } }));
     try std.testing.expectError(error.InvalidUserCount, stats.downloadLeaderboardUsersWith(Native, board, &.{}));
-    const too_many_users = [_]SteamId{.invalid} ** 101;
+    const too_many_users: [101]SteamId = @splat(.invalid);
     try std.testing.expectError(error.InvalidUserCount, stats.downloadLeaderboardUsersWith(Native, board, &too_many_users));
-    const too_many_details = [_]i32{0} ** 65;
+    const too_many_details: [65]i32 = @splat(0);
     try std.testing.expectError(error.TooLarge, stats.uploadLeaderboardWith(Native, board, .{ .score = 0, .details = &too_many_details }));
     try std.testing.expectEqual(before_invalid, Native.calls);
-    const users = [_]SteamId{ .invalid, @enumFromInt(0xfedcba9876543210), @enumFromInt(0xfedcba9876543210) };
+    const users = [_]SteamId{ .invalid, @fromBackingInt(@intCast(0xfedcba9876543210)), @fromBackingInt(@intCast(0xfedcba9876543210)) };
     Native.users = &users;
     for ([_]u8{ 0, 1 }) |availability| {
         Native.availability = availability;
@@ -1144,8 +1141,8 @@ test "Stats progression bounds, forwarding and independent session request slots
     try std.testing.expectError(error.InterfaceUnavailable, stats.achievementIconWith(Native, "name"));
     Native.availability = 1;
     Native.call_id = 0xe123456789abcdef;
-    try std.testing.expectEqual(Native.call_id, @intFromEnum((try stats.findLeaderboardWith(Native, "name")).call));
-    try std.testing.expectEqual(Native.call_id, @intFromEnum((try stats.requestGlobalPercentagesWith(Native)).call));
+    try std.testing.expectEqual(Native.call_id, @backingInt((try stats.findLeaderboardWith(Native, "name")).call));
+    try std.testing.expectEqual(Native.call_id, @backingInt((try stats.requestGlobalPercentagesWith(Native)).call));
     _ = try stats.downloadLeaderboardWith(Native, board, window);
     try std.testing.expectEqual(Native.call_id, context.leaderboard_download_call);
     const pending_calls = Native.calls;
@@ -1173,7 +1170,7 @@ test "Stats progression bounds, forwarding and independent session request slots
     _ = try stats.uploadLeaderboardWith(Native, board, .{ .score = 0 });
     context.leaderboard_download_blocked = false;
     context.leaderboard_upload_call = 0;
-    const details = [_]i32{std.math.minInt(i32)} ** 64;
+    const details: [64]i32 = @splat(std.math.minInt(i32));
     Native.upload = .{ .score = std.math.minInt(i32), .method = .force_update, .details = &details };
     _ = try stats.uploadLeaderboardWith(Native, board, Native.upload);
     Native.around = 1;
@@ -1192,7 +1189,7 @@ test "Stats progression bounds, forwarding and independent session request slots
     Native.first = std.math.maxInt(i32);
     Native.last = Native.first;
     _ = try stats.downloadLeaderboardWith(Native, board, .{ .global = .{ .first_rank = std.math.maxInt(i32), .last_rank = std.math.maxInt(i32) } });
-    const full_users = [_]SteamId{.invalid} ** 100;
+    const full_users: [100]SteamId = @splat(.invalid);
     for ([_][]const SteamId{ users[0..1], &full_users }) |ids| {
         context.leaderboard_download_call = 0;
         Native.users = ids;
@@ -1223,7 +1220,7 @@ test "Stats progression metadata and global percentage owned outcomes preserve u
         }
         fn sw_stats_percentage_step(first: u8, prev: i32, out: *c.sw_stats_percentage) u8 {
             require((first != 0) == (previous == null));
-            if (previous) |cursor| require(prev == @intFromEnum(cursor));
+            if (previous) |cursor| require(prev == @backingInt(cursor));
             calls += 1;
             out.* = .{ .iterator = iterator, .name_length = length, .percent_bits = percent_bits, .achieved = achieved, .name = @splat('a') };
             return step_status;
@@ -1240,29 +1237,29 @@ test "Stats progression metadata and global percentage owned outcomes preserve u
     defer context.release();
     const stats: Stats = .{ .lease = context.lease() };
     var buffer: [3]u8 = undefined;
-    const metadata = try stats.leaderboardMetadataWith(Native, @enumFromInt(42), &buffer);
+    const metadata = try stats.leaderboardMetadataWith(Native, @fromBackingInt(@intCast(42)), &buffer);
     try std.testing.expectEqualStrings("aaa", metadata.name.?);
     try std.testing.expectEqual(buffer[0..].ptr, metadata.name.?.ptr);
     try std.testing.expectEqual(@as(i32, -77), metadata.entry_count);
-    try std.testing.expectEqual(@as(i32, -123456), @intFromEnum(metadata.sort));
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(metadata.display));
+    try std.testing.expectEqual(@as(i32, -123456), @backingInt(metadata.sort));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(metadata.display));
     Native.length = 0;
-    try std.testing.expectEqualStrings("", (try stats.leaderboardMetadataWith(Native, @enumFromInt(42), &.{})).name.?);
+    try std.testing.expectEqualStrings("", (try stats.leaderboardMetadataWith(Native, @fromBackingInt(@intCast(42)), &.{})).name.?);
     Native.status = c.SW_STATS_TEXT_NULL;
-    try std.testing.expect((try stats.leaderboardMetadataWith(Native, @enumFromInt(42), &.{})).name == null);
+    try std.testing.expect((try stats.leaderboardMetadataWith(Native, @fromBackingInt(@intCast(42)), &.{})).name == null);
     inline for (.{ .{ c.SW_STATS_TEXT_UNAVAILABLE, error.InterfaceUnavailable }, .{ c.SW_STATS_TEXT_SHORT, error.BufferTooSmall }, .{ 255, error.InvalidNativeResult } }) |case| {
         Native.status = case[0];
-        try std.testing.expectError(case[1], stats.leaderboardMetadataWith(Native, @enumFromInt(42), &buffer));
+        try std.testing.expectError(case[1], stats.leaderboardMetadataWith(Native, @fromBackingInt(@intCast(42)), &buffer));
     }
     Native.status = c.SW_STATS_TEXT_OK;
     Native.length = 4;
-    try std.testing.expectError(error.InvalidNativeResult, stats.leaderboardMetadataWith(Native, @enumFromInt(42), &buffer));
+    try std.testing.expectError(error.InvalidNativeResult, stats.leaderboardMetadataWith(Native, @fromBackingInt(@intCast(42)), &buffer));
     const before_invalid = Native.calls;
     try std.testing.expectError(error.InvalidLeaderboard, stats.leaderboardMetadataWith(Native, .invalid, &buffer));
     try std.testing.expectError(error.InvalidIterator, stats.percentageStepWith(Native, .invalid));
-    try std.testing.expectError(error.InvalidIterator, stats.percentageStepWith(Native, @enumFromInt(std.math.minInt(i32))));
+    try std.testing.expectError(error.InvalidIterator, stats.percentageStepWith(Native, @fromBackingInt(@intCast(std.math.minInt(i32)))));
     try std.testing.expectError(error.InteriorNul, stats.globalPercentageWith(Native, "n\x00ame"));
-    try std.testing.expectError(error.TooLarge, stats.globalPercentageWith(Native, "n" ** 128));
+    try std.testing.expectError(error.TooLarge, stats.globalPercentageWith(Native, &@as([128:0]u8, @splat('n'))));
     try std.testing.expectEqual(before_invalid, Native.calls);
     for ([_]u32{ 0, 0x80000000, 0x7fc12345, 0x7f800000, 0xff800000, 0xc1234567 }) |bits| {
         Native.percent_bits = bits;

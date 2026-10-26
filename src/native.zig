@@ -1,3 +1,1 @@
-pub const c = @cImport({
-    @cInclude("core.h");
-});
+pub const c = @import("steamworkz_c");

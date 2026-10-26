@@ -188,78 +188,78 @@ pub const Event = struct {
 pub fn decode(native: *const c.SwEvent) Event {
     const d = &native.data;
     return .{
-        .call = @enumFromInt(native.call),
+        .call = @fromBackingInt(@intCast(native.call)),
         .callback_id = native.callback_id,
         .payload = switch (native.kind) {
             c.SW_MALFORMED => .malformed,
             c.SW_CALL_FAILED => .{ .call_failed = if (d.call_failure.reason == c.SW_IO_FAILURE) .io_failure else .result_unavailable },
             c.SW_CONNECTED => .connected,
-            c.SW_DISCONNECTED => .{ .disconnected = @enumFromInt(d.connection.result) },
-            c.SW_CONNECT_FAILURE => .{ .connect_failure = .{ .result = @enumFromInt(d.connection.result), .retrying = d.connection.retrying != 0 } },
+            c.SW_DISCONNECTED => .{ .disconnected = @fromBackingInt(@intCast(d.connection.result)) },
+            c.SW_CONNECT_FAILURE => .{ .connect_failure = .{ .result = @fromBackingInt(@intCast(d.connection.result)), .retrying = d.connection.retrying != 0 } },
             c.SW_SHUTDOWN => .shutdown,
-            c.SW_OVERLAY => .{ .overlay = .{ .active = d.overlay.active != 0, .user_initiated = d.overlay.user_initiated != 0, .app = @enumFromInt(d.overlay.app) } },
-            c.SW_DLC_INSTALLED => .{ .dlc_installed = @enumFromInt(d.dlc.app) },
-            c.SW_PERSONA_CHANGED => .{ .persona_changed = .{ .user = @enumFromInt(d.persona.user), .flags = d.persona.flags } },
-            c.SW_AVATAR_LOADED => .{ .avatar_loaded = .{ .user = @enumFromInt(d.avatar.user), .image = @enumFromInt(d.avatar.image), .width = d.avatar.width, .height = d.avatar.height } },
-            c.SW_PRESENCE_CHANGED => .{ .presence_changed = .{ .user = @enumFromInt(d.presence.user), .app = @enumFromInt(d.presence.app) } },
-            c.SW_GAME_JOIN_REQUESTED => .{ .game_join_requested = .{ .user = @enumFromInt(d.game_join.user), .connect = d.game_join.connect } },
-            c.SW_LOBBY_JOIN_REQUESTED => .{ .lobby_join_requested = .{ .lobby = @enumFromInt(d.lobby_invite.lobby), .user = @enumFromInt(d.lobby_invite.user) } },
-            c.SW_LOBBY_INVITE => .{ .lobby_invite = .{ .lobby = @enumFromInt(d.lobby_invite.lobby), .user = @enumFromInt(d.lobby_invite.user), .game = d.lobby_invite.game } },
-            c.SW_LOBBY_CREATED => .{ .lobby_created = .{ .lobby = @enumFromInt(d.lobby_created.lobby), .result = @enumFromInt(d.lobby_created.result) } },
-            c.SW_LOBBY_ENTERED => .{ .lobby_entered = .{ .lobby = @enumFromInt(d.lobby_entered.lobby), .response = @enumFromInt(d.lobby_entered.response), .locked = d.lobby_entered.locked != 0 } },
+            c.SW_OVERLAY => .{ .overlay = .{ .active = d.overlay.active != 0, .user_initiated = d.overlay.user_initiated != 0, .app = @fromBackingInt(@intCast(d.overlay.app)) } },
+            c.SW_DLC_INSTALLED => .{ .dlc_installed = @fromBackingInt(@intCast(d.dlc.app)) },
+            c.SW_PERSONA_CHANGED => .{ .persona_changed = .{ .user = @fromBackingInt(@intCast(d.persona.user)), .flags = d.persona.flags } },
+            c.SW_AVATAR_LOADED => .{ .avatar_loaded = .{ .user = @fromBackingInt(@intCast(d.avatar.user)), .image = @fromBackingInt(@intCast(d.avatar.image)), .width = d.avatar.width, .height = d.avatar.height } },
+            c.SW_PRESENCE_CHANGED => .{ .presence_changed = .{ .user = @fromBackingInt(@intCast(d.presence.user)), .app = @fromBackingInt(@intCast(d.presence.app)) } },
+            c.SW_GAME_JOIN_REQUESTED => .{ .game_join_requested = .{ .user = @fromBackingInt(@intCast(d.game_join.user)), .connect = d.game_join.connect } },
+            c.SW_LOBBY_JOIN_REQUESTED => .{ .lobby_join_requested = .{ .lobby = @fromBackingInt(@intCast(d.lobby_invite.lobby)), .user = @fromBackingInt(@intCast(d.lobby_invite.user)) } },
+            c.SW_LOBBY_INVITE => .{ .lobby_invite = .{ .lobby = @fromBackingInt(@intCast(d.lobby_invite.lobby)), .user = @fromBackingInt(@intCast(d.lobby_invite.user)), .game = d.lobby_invite.game } },
+            c.SW_LOBBY_CREATED => .{ .lobby_created = .{ .lobby = @fromBackingInt(@intCast(d.lobby_created.lobby)), .result = @fromBackingInt(@intCast(d.lobby_created.result)) } },
+            c.SW_LOBBY_ENTERED => .{ .lobby_entered = .{ .lobby = @fromBackingInt(@intCast(d.lobby_entered.lobby)), .response = @fromBackingInt(@intCast(d.lobby_entered.response)), .locked = d.lobby_entered.locked != 0 } },
             c.SW_LOBBY_LIST => .{ .lobby_list = d.lobby_list.count },
-            c.SW_LOBBY_DATA => .{ .lobby_data = .{ .lobby = @enumFromInt(d.lobby_data.lobby), .member = @enumFromInt(d.lobby_data.member), .success = d.lobby_data.success != 0 } },
-            c.SW_LOBBY_MEMBERS => .{ .lobby_members = .{ .lobby = @enumFromInt(d.lobby_members.lobby), .member = @enumFromInt(d.lobby_members.member), .actor = @enumFromInt(d.lobby_members.actor), .changes = d.lobby_members.changes } },
-            c.SW_LOBBY_CHAT => .{ .lobby_chat = .{ .lobby = @enumFromInt(d.lobby_chat.lobby), .user = @enumFromInt(d.lobby_chat.user), .chat_id = d.lobby_chat.chat_id, .entry_type = d.lobby_chat.entry_type } },
-            c.SW_LOBBY_KICKED => .{ .lobby_kicked = .{ .lobby = @enumFromInt(d.lobby_kicked.lobby), .actor = @enumFromInt(d.lobby_kicked.actor), .disconnected = d.lobby_kicked.disconnected != 0 } },
-            c.SW_LOBBY_GAME_CREATED => .{ .lobby_game_created = .{ .lobby = @enumFromInt(d.lobby_game.lobby), .server = .{ .steam_id = @enumFromInt(d.lobby_game.server), .ipv4 = d.lobby_game.ipv4, .port = d.lobby_game.port } } },
+            c.SW_LOBBY_DATA => .{ .lobby_data = .{ .lobby = @fromBackingInt(@intCast(d.lobby_data.lobby)), .member = @fromBackingInt(@intCast(d.lobby_data.member)), .success = d.lobby_data.success != 0 } },
+            c.SW_LOBBY_MEMBERS => .{ .lobby_members = .{ .lobby = @fromBackingInt(@intCast(d.lobby_members.lobby)), .member = @fromBackingInt(@intCast(d.lobby_members.member)), .actor = @fromBackingInt(@intCast(d.lobby_members.actor)), .changes = d.lobby_members.changes } },
+            c.SW_LOBBY_CHAT => .{ .lobby_chat = .{ .lobby = @fromBackingInt(@intCast(d.lobby_chat.lobby)), .user = @fromBackingInt(@intCast(d.lobby_chat.user)), .chat_id = d.lobby_chat.chat_id, .entry_type = d.lobby_chat.entry_type } },
+            c.SW_LOBBY_KICKED => .{ .lobby_kicked = .{ .lobby = @fromBackingInt(@intCast(d.lobby_kicked.lobby)), .actor = @fromBackingInt(@intCast(d.lobby_kicked.actor)), .disconnected = d.lobby_kicked.disconnected != 0 } },
+            c.SW_LOBBY_GAME_CREATED => .{ .lobby_game_created = .{ .lobby = @fromBackingInt(@intCast(d.lobby_game.lobby)), .server = .{ .steam_id = @fromBackingInt(@intCast(d.lobby_game.server)), .ipv4 = d.lobby_game.ipv4, .port = d.lobby_game.port } } },
             c.SW_CONNECTION_CHANGED => .{ .connection_changed = .{
                 .info = .{
-                    .connection = @enumFromInt(d.network.info.connection),
-                    .listen_socket = @enumFromInt(d.network.info.listen_socket),
-                    .peer_steam_id = @enumFromInt(d.network.info.peer_steam_id),
-                    .state = @enumFromInt(d.network.info.state),
+                    .connection = @fromBackingInt(@intCast(d.network.info.connection)),
+                    .listen_socket = @fromBackingInt(@intCast(d.network.info.listen_socket)),
+                    .peer_steam_id = @fromBackingInt(@intCast(d.network.info.peer_steam_id)),
+                    .state = @fromBackingInt(@intCast(d.network.info.state)),
                     .end_reason = d.network.info.end_reason,
                     .peer_identity = d.network.info.peer_identity,
                     .end_debug = d.network.info.end_debug,
                 },
-                .old_state = @enumFromInt(d.network.old_state),
+                .old_state = @fromBackingInt(@intCast(d.network.old_state)),
             } },
-            c.SW_RELAY_STATUS => .{ .relay_status = .{ .availability = @enumFromInt(d.relay.availability), .measuring = d.relay.measuring != 0, .debug = d.relay.debug } },
-            c.SW_AUTH_TICKET => .{ .auth_ticket = .{ .ticket = @enumFromInt(d.auth_ticket.ticket), .result = @enumFromInt(d.auth_ticket.result) } },
-            c.SW_WEB_TICKET => if (d.web_ticket.size <= d.web_ticket.bytes.len) .{ .web_ticket = .{ .ticket = @enumFromInt(d.web_ticket.ticket), .result = @enumFromInt(d.web_ticket.result), .size = d.web_ticket.size, .bytes = d.web_ticket.bytes } } else .malformed,
-            c.SW_AUTH_VALIDATED => .{ .auth_validated = .{ .user = @enumFromInt(d.auth_validated.user), .owner = @enumFromInt(d.auth_validated.owner), .response = @enumFromInt(d.auth_validated.response) } },
-            c.SW_STATS_RECEIVED => .{ .stats_received = .{ .game = d.stats.game, .user = @enumFromInt(d.stats.user), .result = @enumFromInt(d.stats.result) } },
-            c.SW_STATS_STORED => .{ .stats_stored = .{ .game = d.stats.game, .result = @enumFromInt(d.stats.result) } },
-            c.SW_STATS_UNLOADED => .{ .stats_unloaded = @enumFromInt(d.stats.user) },
+            c.SW_RELAY_STATUS => .{ .relay_status = .{ .availability = @fromBackingInt(@intCast(d.relay.availability)), .measuring = d.relay.measuring != 0, .debug = d.relay.debug } },
+            c.SW_AUTH_TICKET => .{ .auth_ticket = .{ .ticket = @fromBackingInt(@intCast(d.auth_ticket.ticket)), .result = @fromBackingInt(@intCast(d.auth_ticket.result)) } },
+            c.SW_WEB_TICKET => if (d.web_ticket.size <= d.web_ticket.bytes.len) .{ .web_ticket = .{ .ticket = @fromBackingInt(@intCast(d.web_ticket.ticket)), .result = @fromBackingInt(@intCast(d.web_ticket.result)), .size = d.web_ticket.size, .bytes = d.web_ticket.bytes } } else .malformed,
+            c.SW_AUTH_VALIDATED => .{ .auth_validated = .{ .user = @fromBackingInt(@intCast(d.auth_validated.user)), .owner = @fromBackingInt(@intCast(d.auth_validated.owner)), .response = @fromBackingInt(@intCast(d.auth_validated.response)) } },
+            c.SW_STATS_RECEIVED => .{ .stats_received = .{ .game = d.stats.game, .user = @fromBackingInt(@intCast(d.stats.user)), .result = @fromBackingInt(@intCast(d.stats.result)) } },
+            c.SW_STATS_STORED => .{ .stats_stored = .{ .game = d.stats.game, .result = @fromBackingInt(@intCast(d.stats.result)) } },
+            c.SW_STATS_UNLOADED => .{ .stats_unloaded = @fromBackingInt(@intCast(d.stats.user)) },
             c.SW_ACHIEVEMENT_STORED => .{ .achievement_stored = .{ .game = d.achievement.game, .name = d.achievement.name, .current = d.achievement.current, .maximum = d.achievement.maximum, .group = d.achievement.group != 0 } },
-            c.SW_CLOUD_WRITTEN => .{ .cloud_written = @enumFromInt(d.cloud.result) },
-            c.SW_ACHIEVEMENT_ICON => .{ .achievement_icon = .{ .game = d.achievement_icon.game, .name = d.achievement_icon.name, .achieved = d.achievement_icon.achieved != 0, .image = @enumFromInt(d.achievement_icon.image) } },
-            c.SW_LEADERBOARD_FOUND => .{ .leaderboard_found = .{ .leaderboard = @enumFromInt(d.leaderboard_found.leaderboard), .found = d.leaderboard_found.found != 0 } },
+            c.SW_CLOUD_WRITTEN => .{ .cloud_written = @fromBackingInt(@intCast(d.cloud.result)) },
+            c.SW_ACHIEVEMENT_ICON => .{ .achievement_icon = .{ .game = d.achievement_icon.game, .name = d.achievement_icon.name, .achieved = d.achievement_icon.achieved != 0, .image = @fromBackingInt(@intCast(d.achievement_icon.image)) } },
+            c.SW_LEADERBOARD_FOUND => .{ .leaderboard_found = .{ .leaderboard = @fromBackingInt(@intCast(d.leaderboard_found.leaderboard)), .found = d.leaderboard_found.found != 0 } },
             c.SW_LEADERBOARD_ENTRIES => blk: {
                 const snapshot = leaderboardEntries(d.leaderboard_download.leaderboard, &d.leaderboard_download.capture) orelse break :blk .malformed;
                 break :blk .{ .leaderboard_entries = snapshot };
             },
-            c.SW_LEADERBOARD_UPLOADED => .{ .leaderboard_uploaded = .{ .leaderboard = @enumFromInt(d.leaderboard_upload.leaderboard), .success = d.leaderboard_upload.success != 0, .score = d.leaderboard_upload.score, .changed = d.leaderboard_upload.changed != 0, .rank_new = d.leaderboard_upload.rank_new, .rank_previous = d.leaderboard_upload.rank_previous } },
-            c.SW_GLOBAL_PERCENTAGES_READY => .{ .global_percentages_ready = .{ .game = d.global_percentages.game, .result = @enumFromInt(d.global_percentages.result) } },
+            c.SW_LEADERBOARD_UPLOADED => .{ .leaderboard_uploaded = .{ .leaderboard = @fromBackingInt(@intCast(d.leaderboard_upload.leaderboard)), .success = d.leaderboard_upload.success != 0, .score = d.leaderboard_upload.score, .changed = d.leaderboard_upload.changed != 0, .rank_new = d.leaderboard_upload.rank_new, .rank_previous = d.leaderboard_upload.rank_previous } },
+            c.SW_GLOBAL_PERCENTAGES_READY => .{ .global_percentages_ready = .{ .game = d.global_percentages.game, .result = @fromBackingInt(@intCast(d.global_percentages.result)) } },
             c.SW_GAMEPAD_DISMISSED => blk: {
                 const capture = gamepadText(&d.gamepad.capture) orelse break :blk .malformed;
-                break :blk .{ .gamepad_dismissed = .{ .app = @enumFromInt(d.gamepad.app), .submitted = d.gamepad.submitted != 0, .matched = d.gamepad.matched != 0, .capture = capture } };
+                break :blk .{ .gamepad_dismissed = .{ .app = @fromBackingInt(@intCast(d.gamepad.app)), .submitted = d.gamepad.submitted != 0, .matched = d.gamepad.matched != 0, .capture = capture } };
             },
             c.SW_FLOATING_DISMISSED => .floating_dismissed,
             c.SW_RESUMED => .resumed,
             c.SW_CLOUD_CHANGED => .cloud_changed,
-            c.SW_INPUT_CONNECTED => .{ .input_connected = @enumFromInt(d.input_device.controller) },
-            c.SW_INPUT_DISCONNECTED => .{ .input_disconnected = @enumFromInt(d.input_device.controller) },
-            c.SW_WORKSHOP_QUERY_COMPLETED => .{ .workshop_query_completed = .{ .query = @enumFromInt(d.workshop_query.query), .result = @enumFromInt(d.workshop_query.result), .returned = d.workshop_query.returned, .total = d.workshop_query.total, .cached = d.workshop_query.cached != 0, .cursor = d.workshop_query.cursor } },
-            c.SW_WORKSHOP_ITEM_INSTALLED => .{ .workshop_item_installed = .{ .app = @enumFromInt(d.workshop_installed.app), .item = @enumFromInt(d.workshop_installed.item), .legacy_content = d.workshop_installed.legacy_content, .manifest = d.workshop_installed.manifest } },
-            c.SW_WORKSHOP_DOWNLOADED => .{ .workshop_downloaded = .{ .app = @enumFromInt(d.workshop_download.app), .item = @enumFromInt(d.workshop_download.item), .result = @enumFromInt(d.workshop_download.result) } },
-            c.SW_WORKSHOP_SUBSCRIPTIONS_CHANGED => .{ .workshop_subscriptions_changed = @enumFromInt(d.workshop_subscriptions.app) },
-            c.SW_REMOTE_PLAY_CONNECTED => .{ .remote_play_connected = @enumFromInt(d.remote_session.session) },
-            c.SW_REMOTE_PLAY_DISCONNECTED => .{ .remote_play_disconnected = @enumFromInt(d.remote_session.session) },
+            c.SW_INPUT_CONNECTED => .{ .input_connected = @fromBackingInt(@intCast(d.input_device.controller)) },
+            c.SW_INPUT_DISCONNECTED => .{ .input_disconnected = @fromBackingInt(@intCast(d.input_device.controller)) },
+            c.SW_WORKSHOP_QUERY_COMPLETED => .{ .workshop_query_completed = .{ .query = @fromBackingInt(@intCast(d.workshop_query.query)), .result = @fromBackingInt(@intCast(d.workshop_query.result)), .returned = d.workshop_query.returned, .total = d.workshop_query.total, .cached = d.workshop_query.cached != 0, .cursor = d.workshop_query.cursor } },
+            c.SW_WORKSHOP_ITEM_INSTALLED => .{ .workshop_item_installed = .{ .app = @fromBackingInt(@intCast(d.workshop_installed.app)), .item = @fromBackingInt(@intCast(d.workshop_installed.item)), .legacy_content = d.workshop_installed.legacy_content, .manifest = d.workshop_installed.manifest } },
+            c.SW_WORKSHOP_DOWNLOADED => .{ .workshop_downloaded = .{ .app = @fromBackingInt(@intCast(d.workshop_download.app)), .item = @fromBackingInt(@intCast(d.workshop_download.item)), .result = @fromBackingInt(@intCast(d.workshop_download.result)) } },
+            c.SW_WORKSHOP_SUBSCRIPTIONS_CHANGED => .{ .workshop_subscriptions_changed = @fromBackingInt(@intCast(d.workshop_subscriptions.app)) },
+            c.SW_REMOTE_PLAY_CONNECTED => .{ .remote_play_connected = @fromBackingInt(@intCast(d.remote_session.session)) },
+            c.SW_REMOTE_PLAY_DISCONNECTED => .{ .remote_play_disconnected = @fromBackingInt(@intCast(d.remote_session.session)) },
             c.SW_REMOTE_PLAY_GUEST_INVITE => .{ .remote_play_guest_invite = .{ .url = d.remote_invite.url } },
-            c.SW_REMOTE_PLAY_AVATAR_LOADED => .{ .remote_play_avatar_loaded = .{ .session = @enumFromInt(d.remote_avatar.session), .image = @enumFromInt(d.remote_avatar.image), .width = d.remote_avatar.width, .height = d.remote_avatar.height } },
-            c.SW_SCREENSHOT_READY => .{ .screenshot_ready = .{ .handle = @enumFromInt(d.screenshot.handle), .result = @enumFromInt(d.screenshot.result) } },
+            c.SW_REMOTE_PLAY_AVATAR_LOADED => .{ .remote_play_avatar_loaded = .{ .session = @fromBackingInt(@intCast(d.remote_avatar.session)), .image = @fromBackingInt(@intCast(d.remote_avatar.image)), .width = d.remote_avatar.width, .height = d.remote_avatar.height } },
+            c.SW_SCREENSHOT_READY => .{ .screenshot_ready = .{ .handle = @fromBackingInt(@intCast(d.screenshot.handle)), .result = @fromBackingInt(@intCast(d.screenshot.result)) } },
             c.SW_SCREENSHOT_REQUESTED => .screenshot_requested,
             else => .unhandled,
         },
@@ -269,7 +269,7 @@ pub fn decode(native: *const c.SwEvent) Event {
 fn gamepadText(raw: *const c.SwUtilsTextCapture) ?Utils.GamepadText {
     if (raw.copied_length >= Utils.GamepadText.capacity) return null;
     if (raw.status == c.SW_UTILS_TEXT_COMPLETE and (raw.queried_length == 0 or raw.queried_length > Utils.GamepadText.capacity or raw.queried_length != raw.reported_length or raw.copied_length >= raw.queried_length or raw.bytes[raw.copied_length] != 0)) return null;
-    return .{ .status = @enumFromInt(raw.status), .reported_length = raw.reported_length, .queried_length = raw.queried_length, .copied_length = raw.copied_length, .bytes = raw.bytes };
+    return .{ .status = @fromBackingInt(@intCast(raw.status)), .reported_length = raw.reported_length, .queried_length = raw.queried_length, .copied_length = raw.copied_length, .bytes = raw.bytes };
 }
 
 test "platform events own keyboard bytes and preserve unmatched metadata" {
@@ -288,7 +288,7 @@ test "platform events own keyboard bytes and preserve unmatched metadata" {
     @memset(&capture.bytes, 0);
     try std.testing.expectEqualStrings("own", event.payload.gamepad_dismissed.capture.text().?);
     try std.testing.expect(event.payload.gamepad_dismissed.matched and event.payload.gamepad_dismissed.submitted);
-    try std.testing.expectEqual(@as(u32, 73), @intFromEnum(event.payload.gamepad_dismissed.app));
+    try std.testing.expectEqual(@as(u32, 73), @backingInt(event.payload.gamepad_dismissed.app));
     capture.status = c.SW_UTILS_TEXT_UNTRACKED;
     capture.reported_length = std.math.maxInt(u32);
     capture.queried_length = 0;
@@ -298,7 +298,7 @@ test "platform events own keyboard bytes and preserve unmatched metadata" {
     try std.testing.expect(untracked.capture.status == .untracked and untracked.capture.text() == null and !untracked.matched);
     try std.testing.expectEqual(std.math.maxInt(u32), untracked.capture.reported_length);
     capture.status = 123456;
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(decode(&raw).payload.gamepad_dismissed.capture.status));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(decode(&raw).payload.gamepad_dismissed.capture.status));
     capture.copied_length = Utils.GamepadText.capacity;
     try std.testing.expect(decode(&raw).payload == .malformed);
     capture.copied_length = 0;
@@ -306,9 +306,9 @@ test "platform events own keyboard bytes and preserve unmatched metadata" {
     try std.testing.expect(decode(&raw).payload == .malformed);
     raw.kind = c.SW_INPUT_CONNECTED;
     raw.data.input_device.controller = std.math.maxInt(u64);
-    try std.testing.expectEqual(std.math.maxInt(u64), @intFromEnum(decode(&raw).payload.input_connected));
+    try std.testing.expectEqual(std.math.maxInt(u64), @backingInt(decode(&raw).payload.input_connected));
     raw.kind = c.SW_INPUT_DISCONNECTED;
-    try std.testing.expectEqual(std.math.maxInt(u64), @intFromEnum(decode(&raw).payload.input_disconnected));
+    try std.testing.expectEqual(std.math.maxInt(u64), @backingInt(decode(&raw).payload.input_disconnected));
     inline for (.{ .{ c.SW_FLOATING_DISMISSED, .floating_dismissed }, .{ c.SW_RESUMED, .resumed }, .{ c.SW_CLOUD_CHANGED, .cloud_changed } }) |pair| {
         raw.kind = pair[0];
         try std.testing.expectEqual(pair[1], std.meta.activeTag(decode(&raw).payload));
@@ -332,10 +332,10 @@ comptime {
         .{ Status.invalid_details, c.SW_LEADERBOARD_CAPTURE_INVALID_DETAILS },
         .{ Status.untracked, c.SW_LEADERBOARD_CAPTURE_UNTRACKED },
     };
-    if (@typeInfo(Status).@"enum".fields.len != statuses.len)
+    if (@typeInfo(Status).@"enum".field_names.len != statuses.len)
         @compileError("leaderboard capture status schema check is incomplete");
     for (statuses) |pair| {
-        if (@intFromEnum(pair[0]) != pair[1])
+        if (@backingInt(pair[0]) != pair[1])
             @compileError("leaderboard capture status differs from the C bridge schema: " ++ @tagName(pair[0]));
     }
 }
@@ -344,8 +344,8 @@ fn leaderboardEntries(board: u64, raw: *const c.SwLeaderboardEntries) ?types.Lea
     if (raw.copied_count > types.LeaderboardEntries.max_entries) return null;
     if (raw.copied_count != 0 and (raw.reported_count < 0 or raw.copied_count > raw.reported_count)) return null;
     var result: types.LeaderboardEntries = .{
-        .leaderboard = @enumFromInt(board),
-        .status = @enumFromInt(raw.status),
+        .leaderboard = @fromBackingInt(@intCast(board)),
+        .status = @fromBackingInt(@intCast(raw.status)),
         .reported_count = raw.reported_count,
         .copied_count = raw.copied_count,
         .failure_index = raw.failure_index,
@@ -354,7 +354,7 @@ fn leaderboardEntries(board: u64, raw: *const c.SwLeaderboardEntries) ?types.Lea
     };
     for (raw.entries[0..raw.copied_count], result.entry_values[0..raw.copied_count]) |*source, *entry| {
         if (source.detail_count > types.LeaderboardEntry.max_details) return null;
-        entry.* = .{ .user = @enumFromInt(source.user), .global_rank = source.global_rank, .score = source.score, .ugc = source.ugc, .detail_count = source.detail_count };
+        entry.* = .{ .user = @fromBackingInt(@intCast(source.user)), .global_rank = source.global_rank, .score = source.score, .ugc = source.ugc, .detail_count = source.detail_count };
         @memcpy(entry.detail_values[0..source.detail_count], source.details[0..source.detail_count]);
     }
     return result;
@@ -380,14 +380,14 @@ test "leaderboard events own bounded rows and details independently of native st
     for (&capture.entries[0].details, 0..) |*value, index| value.* = @as(i32, @intCast(index)) - 31;
     const event = decode(&native);
     @memset(std.mem.asBytes(&native), 0);
-    try std.testing.expectEqual(@as(u64, 71), @intFromEnum(event.call));
+    try std.testing.expectEqual(@as(u64, 71), @backingInt(event.call));
     try std.testing.expectEqual(@as(i32, 1105), event.callback_id);
     const result = &event.payload.leaderboard_entries;
-    try std.testing.expectEqual(@as(u64, 83), @intFromEnum(result.leaderboard));
+    try std.testing.expectEqual(@as(u64, 83), @backingInt(result.leaderboard));
     try std.testing.expect(result.all_rows_accessed);
     try std.testing.expectEqual(@as(usize, 1), result.entries().len);
     const row = &result.entries()[0];
-    try std.testing.expectEqual(@as(u64, 97), @intFromEnum(row.user));
+    try std.testing.expectEqual(@as(u64, 97), @backingInt(row.user));
     try std.testing.expectEqual(@as(i32, -5), row.global_rank);
     try std.testing.expectEqual(std.math.minInt(i32), row.score);
     try std.testing.expectEqual(std.math.maxInt(u64), row.ugc);
@@ -404,7 +404,7 @@ test "leaderboard conversion rejects invalid published bounds but retains captur
     try std.testing.expect(failed.status == .invalid_count);
     try std.testing.expectEqual(@as(usize, 0), failed.entries().len);
     raw.status = 123456;
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(leaderboardEntries(7, &raw).?.status));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(leaderboardEntries(7, &raw).?.status));
     raw.copied_count = 1;
     try std.testing.expect(leaderboardEntries(7, &raw) == null);
     raw.reported_count = 1;
@@ -427,12 +427,12 @@ test "progression event fields preserve operation failure, signed values and bou
     try std.testing.expectEqual(native.data.achievement_icon.name.len, icon.nameText().len);
     try std.testing.expectEqual(std.math.maxInt(u64), icon.game);
     try std.testing.expect(icon.achieved);
-    try std.testing.expectEqual(@as(i32, 17), @intFromEnum(icon.image));
+    try std.testing.expectEqual(@as(i32, 17), @backingInt(icon.image));
     native.kind = c.SW_LEADERBOARD_FOUND;
     native.data.leaderboard_found = .{ .leaderboard = 19, .found = 0 };
     const found = decode(&native).payload.leaderboard_found;
     try std.testing.expect(!found.found);
-    try std.testing.expectEqual(@as(u64, 19), @intFromEnum(found.leaderboard));
+    try std.testing.expectEqual(@as(u64, 19), @backingInt(found.leaderboard));
     native.kind = c.SW_LEADERBOARD_UPLOADED;
     native.data.leaderboard_upload = .{ .leaderboard = 23, .success = 0, .score = -31, .changed = 1, .rank_new = -2, .rank_previous = 0 };
     const upload = decode(&native).payload.leaderboard_uploaded;
@@ -444,7 +444,7 @@ test "progression event fields preserve operation failure, signed values and bou
     native.data.global_percentages = .{ .game = 29, .result = 123456 };
     const percentages = decode(&native).payload.global_percentages_ready;
     try std.testing.expectEqual(@as(u64, 29), percentages.game);
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(percentages.result));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(percentages.result));
 }
 
 test "events own strings and retain call correlation and unknown result codes" {
@@ -456,11 +456,11 @@ test "events own strings and retain call correlation and unknown result codes" {
     const event = decode(&native);
     native.data.game_join.connect[0] = 'x';
     try std.testing.expectEqualStrings("hello", event.payload.game_join_requested.connectText());
-    try std.testing.expectEqual(@as(types.ApiCall, @enumFromInt(123)), event.call);
+    try std.testing.expectEqual(@as(types.ApiCall, @fromBackingInt(@intCast(123))), event.call);
     try std.testing.expectEqual(@as(i32, 456), event.callback_id);
     native.kind = c.SW_LOBBY_CREATED;
     native.data.lobby_created.result = 123456;
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(decode(&native).payload.lobby_created.result));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(decode(&native).payload.lobby_created.result));
 }
 
 test "stats_unloaded owns the affected user identity without call correlation" {
@@ -470,7 +470,7 @@ test "stats_unloaded owns the affected user identity without call correlation" {
     native.data.stats.user = 0x123456789abcdef0;
     const event = decode(&native);
     native.data.stats.user = 99;
-    try std.testing.expectEqual(@as(SteamId, @enumFromInt(0x123456789abcdef0)), event.payload.stats_unloaded);
+    try std.testing.expectEqual(@as(SteamId, @fromBackingInt(@intCast(0x123456789abcdef0))), event.payload.stats_unloaded);
     try std.testing.expectEqual(types.ApiCall.invalid, event.call);
     try std.testing.expectEqual(@as(i32, 456), event.callback_id);
 }
@@ -483,10 +483,10 @@ test "auth_validated names network identity failure and preserves unknown respon
     native.data.auth_validated.user = 42;
     native.data.auth_validated.owner = 43;
     try std.testing.expectEqual(AuthResponse.network_identity_failure, event.payload.auth_validated.response);
-    try std.testing.expectEqual(@as(SteamId, @enumFromInt(23)), event.payload.auth_validated.user);
-    try std.testing.expectEqual(@as(SteamId, @enumFromInt(99)), event.payload.auth_validated.owner);
+    try std.testing.expectEqual(@as(SteamId, @fromBackingInt(@intCast(23))), event.payload.auth_validated.user);
+    try std.testing.expectEqual(@as(SteamId, @fromBackingInt(@intCast(99))), event.payload.auth_validated.owner);
     native.data.auth_validated.response = 123456;
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(decode(&native).payload.auth_validated.response));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(decode(&native).payload.auth_validated.response));
 }
 
 test "connection events use the networking handle and state types" {
@@ -494,15 +494,15 @@ test "connection events use the networking handle and state types" {
     native.kind = c.SW_CONNECTION_CHANGED;
     native.data.network.info.connection = 23;
     native.data.network.info.listen_socket = 42;
-    native.data.network.info.state = @intFromEnum(Networking.State.connected);
+    native.data.network.info.state = @backingInt(Networking.State.connected);
     native.data.network.old_state = 123456;
     const changed = decode(&native).payload.connection_changed;
     const connection: Networking.Connection = changed.info.connection;
     const socket: Networking.ListenSocket = changed.info.listen_socket;
-    try std.testing.expectEqual(@as(u32, 23), @intFromEnum(connection));
-    try std.testing.expectEqual(@as(u32, 42), @intFromEnum(socket));
+    try std.testing.expectEqual(@as(u32, 23), @backingInt(connection));
+    try std.testing.expectEqual(@as(u32, 42), @backingInt(socket));
     try std.testing.expectEqual(Networking.State.connected, changed.info.state);
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(changed.old_state));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(changed.old_state));
 }
 
 test "lobby game association and avatar readiness preserve supplied data" {
@@ -510,15 +510,15 @@ test "lobby game association and avatar readiness preserve supplied data" {
     native.kind = c.SW_LOBBY_GAME_CREATED;
     native.data.lobby_game = .{ .lobby = 23, .server = 99, .ipv4 = 0x7f000001, .port = 27015 };
     const game = decode(&native).payload.lobby_game_created;
-    try std.testing.expectEqual(@as(u64, 23), @intFromEnum(game.lobby));
-    try std.testing.expectEqual(@as(u64, 99), @intFromEnum(game.server.steam_id));
+    try std.testing.expectEqual(@as(u64, 23), @backingInt(game.lobby));
+    try std.testing.expectEqual(@as(u64, 99), @backingInt(game.server.steam_id));
     try std.testing.expectEqual(@as(u32, 0x7f000001), game.server.ipv4);
     try std.testing.expectEqual(@as(u16, 27015), game.server.port);
     native.kind = c.SW_AVATAR_LOADED;
     native.data.avatar = .{ .user = 99, .image = 17, .width = 10, .height = 20 };
     const avatar = decode(&native).payload.avatar_loaded;
-    try std.testing.expectEqual(@as(u64, 99), @intFromEnum(avatar.user));
-    try std.testing.expectEqual(@as(types.ImageHandle, @enumFromInt(17)), avatar.image);
+    try std.testing.expectEqual(@as(u64, 99), @backingInt(avatar.user));
+    try std.testing.expectEqual(@as(types.ImageHandle, @fromBackingInt(@intCast(17))), avatar.image);
     try std.testing.expectEqual(@as(u32, 10), avatar.width);
     try std.testing.expectEqual(@as(u32, 20), avatar.height);
 }
@@ -530,8 +530,8 @@ test "event text accessors stay bounded and relay availability retains unknown v
     native.data.relay.debug = @splat('x');
     const relay = decode(&native).payload.relay_status;
     native.data.relay.debug[0] = 0;
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(relay.availability));
-    try std.testing.expectEqualStrings(&([_]u8{'x'} ** 256), relay.debugText());
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(relay.availability));
+    try std.testing.expectEqualStrings(&@as([256]u8, @splat('x')), relay.debugText());
     native.kind = c.SW_ACHIEVEMENT_STORED;
     native.data.achievement.name = @splat(0);
     @memcpy(native.data.achievement.name[0..5], "award");
@@ -555,10 +555,10 @@ test "capability events own query metadata and complete installed item identitie
     const event = decode(&raw);
     @memset(std.mem.asBytes(&raw), 0);
     const query = &event.payload.workshop_query_completed;
-    try std.testing.expectEqual(@as(u64, 71), @intFromEnum(event.call));
+    try std.testing.expectEqual(@as(u64, 71), @backingInt(event.call));
     try std.testing.expectEqual(@as(i32, 3401), event.callback_id);
-    try std.testing.expectEqual(@as(u64, 0), @intFromEnum(query.query));
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(query.result));
+    try std.testing.expectEqual(@as(u64, 0), @backingInt(query.query));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(query.result));
     try std.testing.expectEqual(@as(u32, 3), query.returned);
     try std.testing.expectEqual(@as(u32, 19), query.total);
     try std.testing.expect(query.cached);
@@ -568,20 +568,20 @@ test "capability events own query metadata and complete installed item identitie
     raw.data.workshop_installed = .{ .app = 23, .item = 29, .legacy_content = 31, .manifest = std.math.maxInt(u64) };
     const installed = decode(&raw).payload.workshop_item_installed;
     @memset(std.mem.asBytes(&raw), 0);
-    try std.testing.expectEqual(@as(u32, 23), @intFromEnum(installed.app));
-    try std.testing.expectEqual(@as(u64, 29), @intFromEnum(installed.item));
+    try std.testing.expectEqual(@as(u32, 23), @backingInt(installed.app));
+    try std.testing.expectEqual(@as(u64, 29), @backingInt(installed.item));
     try std.testing.expectEqual(@as(u64, 31), installed.legacy_content);
     try std.testing.expectEqual(std.math.maxInt(u64), installed.manifest);
     raw.kind = c.SW_WORKSHOP_DOWNLOADED;
     raw.data.workshop_download = .{ .app = 37, .item = 41, .result = -123456 };
     const downloaded = decode(&raw);
     try std.testing.expect(downloaded.call == .invalid);
-    try std.testing.expectEqual(@as(u32, 37), @intFromEnum(downloaded.payload.workshop_downloaded.app));
-    try std.testing.expectEqual(@as(u64, 41), @intFromEnum(downloaded.payload.workshop_downloaded.item));
-    try std.testing.expectEqual(@as(i32, -123456), @intFromEnum(downloaded.payload.workshop_downloaded.result));
+    try std.testing.expectEqual(@as(u32, 37), @backingInt(downloaded.payload.workshop_downloaded.app));
+    try std.testing.expectEqual(@as(u64, 41), @backingInt(downloaded.payload.workshop_downloaded.item));
+    try std.testing.expectEqual(@as(i32, -123456), @backingInt(downloaded.payload.workshop_downloaded.result));
     raw.kind = c.SW_WORKSHOP_SUBSCRIPTIONS_CHANGED;
     raw.data.workshop_subscriptions.app = 43;
-    try std.testing.expectEqual(@as(u32, 43), @intFromEnum(decode(&raw).payload.workshop_subscriptions_changed));
+    try std.testing.expectEqual(@as(u32, 43), @backingInt(decode(&raw).payload.workshop_subscriptions_changed));
 }
 
 test "capability events retain invitation bytes signed avatar data and screenshot failures" {
@@ -595,22 +595,22 @@ test "capability events retain invitation bytes signed avatar data and screensho
         raw.kind = pair[0];
         raw.data.remote_session.session = 47;
         const event = decode(&raw);
-        try std.testing.expectEqual(@as(u32, 47), @intFromEnum(@field(event.payload, @tagName(pair[1]))));
+        try std.testing.expectEqual(@as(u32, 47), @backingInt(@field(event.payload, @tagName(pair[1]))));
         try std.testing.expect(event.call == .invalid);
     }
     raw.kind = c.SW_REMOTE_PLAY_AVATAR_LOADED;
     raw.data.remote_avatar = .{ .session = 53, .image = -1, .width = -3, .height = 0 };
     const avatar = decode(&raw).payload.remote_play_avatar_loaded;
-    try std.testing.expectEqual(@as(u32, 53), @intFromEnum(avatar.session));
-    try std.testing.expectEqual(@as(i32, -1), @intFromEnum(avatar.image));
+    try std.testing.expectEqual(@as(u32, 53), @backingInt(avatar.session));
+    try std.testing.expectEqual(@as(i32, -1), @backingInt(avatar.image));
     try std.testing.expectEqual(@as(i32, -3), avatar.width);
     try std.testing.expectEqual(@as(i32, 0), avatar.height);
     raw.kind = c.SW_SCREENSHOT_READY;
     raw.data.screenshot = .{ .handle = 59, .result = 123456 };
     const ready = decode(&raw).payload.screenshot_ready;
     @memset(std.mem.asBytes(&raw), 0);
-    try std.testing.expectEqual(@as(u32, 59), @intFromEnum(ready.handle));
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(ready.result));
+    try std.testing.expectEqual(@as(u32, 59), @backingInt(ready.handle));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(ready.result));
     raw.kind = c.SW_SCREENSHOT_REQUESTED;
     try std.testing.expect(decode(&raw).payload == .screenshot_requested);
 }
@@ -627,15 +627,15 @@ test "property web ticket boundary lengths copy binary payload and correlation" 
         for (&native.data.web_ticket.bytes, 0..) |*byte, i| byte.* = @truncate(i);
         const event = decode(&native);
         @memset(&native.data.web_ticket.bytes, 0xaa);
-        try std.testing.expectEqual(@as(u64, 0xfedcba9876543210), @intFromEnum(event.call));
+        try std.testing.expectEqual(@as(u64, 0xfedcba9876543210), @backingInt(event.call));
         try std.testing.expectEqual(@as(i32, 168), event.callback_id);
         if (size > 2560) {
             try std.testing.expect(event.payload == .malformed);
         } else {
             const ticket = event.payload.web_ticket;
             try std.testing.expectEqual(size, ticket.size);
-            try std.testing.expectEqual(@as(i32, -123456), @intFromEnum(ticket.result));
-            try std.testing.expectEqual(@as(u32, 0xfedcba98), @intFromEnum(ticket.ticket));
+            try std.testing.expectEqual(@as(i32, -123456), @backingInt(ticket.result));
+            try std.testing.expectEqual(@as(u32, 0xfedcba98), @backingInt(ticket.ticket));
             // Only the declared prefix is ticket data; do not constrain unused storage.
             for (ticket.bytes[0..size], 0..) |byte, i| try std.testing.expectEqual(@as(u8, @truncate(i)), byte);
         }

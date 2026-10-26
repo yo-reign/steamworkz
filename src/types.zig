@@ -122,7 +122,7 @@ pub fn count(length: usize) error{TooLarge}!c_int {
 
 test "leaderboard snapshots and details borrow only their owned prefixes" {
     var snapshot: LeaderboardEntries = .{ .copied_count = 1 };
-    snapshot.entry_values[0] = .{ .user = @enumFromInt(71), .score = -17, .detail_count = 2 };
+    snapshot.entry_values[0] = .{ .user = @fromBackingInt(@intCast(71)), .score = -17, .detail_count = 2 };
     snapshot.entry_values[0].detail_values[0..2].* = .{ -3, 29 };
     const copy = snapshot;
     snapshot.entry_values[0].detail_values[0] = 99;
@@ -143,7 +143,7 @@ test "fixed text supports missing terminators without reading outside the slice"
 
 test "text copies own their bytes and never truncate or modify a short buffer" {
     var source = [_]u8{ 'a', 'b', 'c' };
-    var storage = [_]u8{'x'} ** 4;
+    var storage: [4]u8 = @splat('x');
     const copied = try copyText(&storage, &source);
     @memset(&source, 'z');
     try std.testing.expectEqualStrings("abc", copied);
@@ -162,15 +162,15 @@ test "C counts reject overflow and retain exact representable values" {
 test "unexposed SDK results stay unnamed rather than acquiring unrelated error tags" {
     // SDK 1.65: ShoppingCartNotFound and NotSettled, not invalid-handle/buffer errors.
     for ([_]i32{ 39, 100 }) |raw| {
-        const result: Result = @enumFromInt(raw);
+        const result: Result = @fromBackingInt(@intCast(raw));
         try std.testing.expect(std.enums.tagName(Result, result) == null);
-        try std.testing.expectEqual(raw, @intFromEnum(result));
+        try std.testing.expectEqual(raw, @backingInt(result));
     }
 }
 
 test "unknown native results retain their numeric value" {
-    const value: Result = @enumFromInt(123456);
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(value));
+    const value: Result = @fromBackingInt(@intCast(123456));
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(value));
 }
 
 test "property text terminator positions and copy capacities" {

@@ -1,28 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
-// Native spawn types come from the target's libc headers, never guessed layouts.
-const spawn_api = if (builtin.os.tag == .windows) struct {} else @cImport({
-    // Exclude Darwin's unrelated Mach extensions (untranslatable bitfields).
-    @cDefine("_POSIX_C_SOURCE", "200809L");
-    @cInclude("spawn.h");
-});
-const posix = if (builtin.os.tag == .windows) struct {} else @cImport({
-    // Import libc ABI declarations, not glibc's fortified C inline wrappers:
-    // Zig 0.16 cannot translate variadic open/openat wrappers in ReleaseSafe.
-    // This affects this declaration import only, not native C/C++ hardening.
-    if (builtin.os.tag == .linux) @cUndef("_FORTIFY_SOURCE");
-    @cInclude("fcntl.h");
-    @cInclude("unistd.h");
-    @cInclude("paths.h");
-    @cInclude("stdlib.h");
-    @cInclude("sys/stat.h");
-    @cInclude("sys/resource.h");
-    if (builtin.os.tag == .macos) @cInclude("crt_externs.h");
-});
+// Build-time translation derives native spawn types from the target's libc headers.
+const spawn_api = if (builtin.target.os.tag == .windows) struct {} else @import("spawn_api");
+const posix = if (builtin.target.os.tag == .windows) struct {} else @import("posix_api");
 
 fn checkPosixError(code: c_int) !void {
-    switch (@as(std.posix.E, @enumFromInt(code))) {
+    switch (@as(std.posix.E, @fromBackingInt(@intCast(code)))) {
         .SUCCESS => {},
         .NOENT => return error.FileNotFound,
         .NOEXEC, .INVAL => return error.InvalidExe,
@@ -43,13 +27,13 @@ fn closeDescriptor(fd: c_int) void {
 
 fn duplicateAboveStdio(fd: c_int) !c_int {
     const duplicate = posix.fcntl(fd, posix.F_DUPFD_CLOEXEC, @as(c_int, 3));
-    if (duplicate == -1) try checkPosixError(@intFromEnum(std.posix.errno(-1)));
+    if (duplicate == -1) try checkPosixError(@backingInt(std.posix.errno(-1)));
     return duplicate;
 }
 
 fn capturePipe() ![2]c_int {
     var raw: [2]c_int = undefined;
-    if (posix.pipe(&raw) != 0) try checkPosixError(@intFromEnum(std.posix.errno(-1)));
+    if (posix.pipe(&raw) != 0) try checkPosixError(@backingInt(std.posix.errno(-1)));
     defer for (raw) |fd| closeDescriptor(fd);
     // Relocate BOTH ends even when 0/1/2 were closed. File actions can then
     // install standard streams without clobbering a source or closing a target.
@@ -66,7 +50,7 @@ fn spawnCapture(allocator: std.mem.Allocator, io: Io, argv: []const []const u8) 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arguments = try arena.allocator().allocSentinel(?[*:0]u8, argv.len, null);
-    for (argv, 0..) |arg, index| arguments[index] = (try arena.allocator().dupeZ(u8, arg)).ptr;
+    for (argv, 0..) |arg, index| arguments[index] = (try arena.allocator().dupeSentinel(u8, arg, 0)).ptr;
 
     const stdout = try capturePipe();
     defer closeDescriptor(stdout[1]);
@@ -124,7 +108,7 @@ fn spawnWithPath(io: Io, arguments: [:null]?[*:0]u8, actions: *const spawn_api.p
     while (entries.next()) |directory| {
         if (directory.len == 0) continue;
         var buffer: [std.posix.PATH_MAX]u8 = undefined;
-        const candidate = std.fmt.bufPrintZ(&buffer, "{s}/{s}", .{ directory, file }) catch return error.NameTooLong;
+        const candidate = std.mem.printSentinel(&buffer, "{s}/{s}", .{ directory, file }, 0) catch return error.NameTooLong;
         return spawnAt(io, candidate, arguments, actions) catch |err| {
             switch (err) {
                 error.AccessDenied => denied = true,
@@ -430,7 +414,7 @@ fn selfTest(allocator: std.mem.Allocator, io: Io, executable: []const u8) !void 
 fn temporaryTemplate(allocator: std.mem.Allocator, name: []const u8) ![:0]u8 {
     const configured = posix.getenv("TMPDIR");
     const directory: []const u8 = if (configured != null and configured[0] != 0) std.mem.span(configured) else posix._PATH_TMP;
-    return std.fmt.allocPrintSentinel(allocator, "{s}{s}{s}-XXXXXX", .{
+    return allocator.printSentinel("{s}{s}{s}-XXXXXX", .{
         directory,
         if (std.mem.endsWith(u8, directory, "/")) "" else "/",
         name,
@@ -453,17 +437,17 @@ fn pathSearchTest(allocator: std.mem.Allocator, io: Io, executable: []const u8) 
     try std.testing.expectEqualStrings(directory, std.fs.path.dirname(configured_path).?);
     const target = try Io.Dir.cwd().realPathFileAlloc(io, executable, allocator);
     defer allocator.free(target);
-    const success = try std.fmt.allocPrintSentinel(allocator, "{s}/success", .{directory}, 0);
+    const success = try allocator.printSentinel("{s}/success", .{directory}, 0);
     defer allocator.free(success);
     if (posix.symlink(target, success) != 0) return error.SymlinkFailed;
     defer _ = posix.unlink(success);
-    const invalid = try std.fmt.allocPrintSentinel(allocator, "{s}/invalid", .{directory}, 0);
+    const invalid = try allocator.printSentinel("{s}/invalid", .{directory}, 0);
     defer allocator.free(invalid);
     const fd = posix.open(invalid, posix.O_CREAT | posix.O_EXCL | posix.O_WRONLY, @as(posix.mode_t, 0o700));
     if (fd == -1) return error.CreateInvalidExecutableFailed;
     closeDescriptor(fd); // Empty, executable file: ENOEXEC, never shell fallback.
     defer _ = posix.unlink(invalid);
-    const path = try std.fmt.allocPrintSentinel(allocator, ":{s}::/steamworkz-missing-path", .{directory}, 0);
+    const path = try allocator.printSentinel(":{s}::/steamworkz-missing-path", .{directory}, 0);
     defer allocator.free(path);
     if (posix.setenv("PATH", path, 1) != 0) return error.SetEnvironmentFailed;
     var capture: Capture = .{ .allocator = allocator, .io = io, .argv = &.{ "success", "--fixture", stream_fixture_name } };

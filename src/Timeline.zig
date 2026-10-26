@@ -5,9 +5,7 @@
 //! Valve: https://partner.steamgames.com/doc/api/ISteamTimeline
 const std = @import("std");
 const Context = @import("Context.zig");
-const c = @cImport({
-    @cInclude("timeline.h");
-});
+const c = @import("steamworkz_c");
 const native = if (@import("builtin").is_test) TestApi else c;
 const Timeline = @This();
 
@@ -32,13 +30,13 @@ pub const Event = struct {
 /// Defaults match AddInstantaneousTimelineEvent in SDK 1.65.
 pub const InstantOptions = struct {
     offset: f32 = c.SW_TIMELINE_DEFAULT_OFFSET,
-    clip: ClipPriority = @enumFromInt(c.SW_TIMELINE_DEFAULT_CLIP),
+    clip: ClipPriority = @fromBackingInt(@intCast(c.SW_TIMELINE_DEFAULT_CLIP)),
 };
 /// Defaults match AddRangeTimelineEvent in SDK 1.65.
 pub const CompletedOptions = struct {
     offset: f32 = c.SW_TIMELINE_DEFAULT_OFFSET,
     duration: f32 = c.SW_TIMELINE_DEFAULT_DURATION,
-    clip: ClipPriority = @enumFromInt(c.SW_TIMELINE_DEFAULT_CLIP),
+    clip: ClipPriority = @fromBackingInt(@intCast(c.SW_TIMELINE_DEFAULT_CLIP)),
 };
 pub const UpdatePriority = union(enum) { keep_current, set: u32 };
 /// All fields are required. Empty text replaces text, never means keep-current.
@@ -54,7 +52,7 @@ pub const Update = struct {
 /// it does not enable recording or establish that recording is available.
 pub fn setMode(self: Timeline, mode: Mode) Error!void {
     self.lease.check();
-    const value = @intFromEnum(mode);
+    const value = @backingInt(mode);
     if (value < 1 or value > 4) return error.InvalidArgument;
     try status(native.sw_timeline_mode(value));
 }
@@ -80,8 +78,8 @@ pub fn instant(self: Timeline, event: Event, options: InstantOptions) Error!Mark
     try finite(options.offset);
     try validClip(options.clip);
     var handle: u64 = 0;
-    try status(native.sw_timeline_instant(event.title.ptr, event.description.ptr, event.icon.ptr, event.priority, options.offset, @intFromEnum(options.clip), &handle));
-    return @enumFromInt(handle);
+    try status(native.sw_timeline_instant(event.title.ptr, event.description.ptr, event.icon.ptr, event.priority, options.offset, @backingInt(options.clip), &handle));
+    return @fromBackingInt(@intCast(handle));
 }
 /// ISteamTimeline::AddRangeTimelineEvent adds an already-completed range;
 /// duration is 0..max_duration seconds. Unlike start, this creates no open owner.
@@ -93,8 +91,8 @@ pub fn completed(self: Timeline, event: Event, options: CompletedOptions) Error!
     if (options.duration < 0 or options.duration > max_duration) return error.InvalidArgument;
     try validClip(options.clip);
     var handle: u64 = 0;
-    try status(native.sw_timeline_completed(event.title.ptr, event.description.ptr, event.icon.ptr, event.priority, options.offset, options.duration, @intFromEnum(options.clip), &handle));
-    return @enumFromInt(handle);
+    try status(native.sw_timeline_completed(event.title.ptr, event.description.ptr, event.icon.ptr, event.priority, options.offset, options.duration, @backingInt(options.clip), &handle));
+    return @fromBackingInt(@intCast(handle));
 }
 /// ISteamTimeline::StartRangeTimelineEvent; offset is seconds relative to now.
 /// Start has no defaults. End or cancel each acquired range. Callers own timing:
@@ -109,7 +107,7 @@ pub fn start(self: Timeline, event: Event, offset: f32, clip: ClipPriority) Erro
     for (&context.timeline_ranges) |*slot| {
         if (slot.token != 0) continue;
         var handle: u64 = 0;
-        try status(native.sw_timeline_start(event.title.ptr, event.description.ptr, event.icon.ptr, event.priority, offset, @intFromEnum(clip), &handle));
+        try status(native.sw_timeline_start(event.title.ptr, event.description.ptr, event.icon.ptr, event.priority, offset, @backingInt(clip), &handle));
         context.timeline_serial += 1;
         slot.* = .{ .token = context.timeline_serial, .handle = handle };
         return .{ .lease = self.lease, .token = slot.token };
@@ -120,7 +118,7 @@ pub fn start(self: Timeline, event: Event, offset: f32, clip: ClipPriority) Erro
 /// again; closed markers are identities, not tracked owners.
 pub fn remove(self: Timeline, marker: Marker) Error!void {
     self.lease.check();
-    try status(native.sw_timeline_remove(@intFromEnum(marker)));
+    try status(native.sw_timeline_remove(@backingInt(marker)));
 }
 
 /// Token-checked open range owner. Copies alias the same Context slot; after
@@ -143,7 +141,7 @@ pub const Range = struct {
                 break :blk p;
             },
         };
-        try status(native.sw_timeline_update(self.lease.context.timeline_ranges[slot].handle, value.title.ptr, value.description.ptr, value.icon.ptr, priority, @intFromEnum(value.clip)));
+        try status(native.sw_timeline_update(self.lease.context.timeline_ranges[slot].handle, value.title.ptr, value.description.ptr, value.icon.ptr, priority, @backingInt(value.clip)));
     }
     /// ISteamTimeline::EndRangeTimelineEvent consumes this open owner and returns
     /// a closed marker. offset is seconds relative to now; negative finite values
@@ -154,7 +152,7 @@ pub const Range = struct {
         try finite(offset);
         const slot = &self.lease.context.timeline_ranges[index];
         try status(native.sw_timeline_end(slot.handle, offset));
-        const marker: Marker = @enumFromInt(slot.handle);
+        const marker: Marker = @fromBackingInt(@intCast(slot.handle));
         slot.* = .{};
         return marker;
     }
@@ -203,7 +201,7 @@ fn validPriority(value: u32) Error!void {
     if (value > max_priority) return error.InvalidArgument;
 }
 fn validClip(value: ClipPriority) Error!void {
-    const n = @intFromEnum(value);
+    const n = @backingInt(value);
     if (n < 1 or n > 3) return error.InvalidArgument;
 }
 fn validEvent(value: Event) Error!void {
@@ -306,7 +304,7 @@ test "Timeline defaults, zero markers and explicit facade operations" {
     try timeline.setTooltip("", -3);
     try timeline.clearTooltip(-2);
     const marker = try timeline.instant(empty_event, .{});
-    try std.testing.expectEqual(@as(u64, 0), @intFromEnum(marker));
+    try std.testing.expectEqual(@as(u64, 0), @backingInt(marker));
     try std.testing.expectEqual(@as(f32, 0), TestApi.offset);
     try std.testing.expectEqual(@as(i32, c.SW_TIMELINE_DEFAULT_CLIP), TestApi.clip);
     _ = try timeline.completed(empty_event, .{});
@@ -329,8 +327,8 @@ test "Timeline finite offsets, duration boundaries, enums, priority and complete
         try std.testing.expectError(error.InvalidArgument, timeline.start(empty_event, bad, .none));
     }
     for ([_]f32{ -0.001, 600.001 }) |bad| try std.testing.expectError(error.InvalidArgument, timeline.completed(empty_event, .{ .duration = bad }));
-    for ([_]i32{ 0, -1, 5, std.math.maxInt(i32) }) |bad| try std.testing.expectError(error.InvalidArgument, timeline.setMode(@enumFromInt(bad)));
-    for ([_]i32{ 0, -1, 4, std.math.maxInt(i32) }) |bad| try std.testing.expectError(error.InvalidArgument, timeline.instant(empty_event, .{ .clip = @enumFromInt(bad) }));
+    for ([_]i32{ 0, -1, 5, std.math.maxInt(i32) }) |bad| try std.testing.expectError(error.InvalidArgument, timeline.setMode(@fromBackingInt(@intCast(bad))));
+    for ([_]i32{ 0, -1, 4, std.math.maxInt(i32) }) |bad| try std.testing.expectError(error.InvalidArgument, timeline.instant(empty_event, .{ .clip = @fromBackingInt(@intCast(bad)) }));
     for ([_]u32{ 1001, c.SW_TIMELINE_KEEP_PRIORITY, std.math.maxInt(u32) }) |bad| {
         var event = empty_event;
         event.priority = bad;
@@ -386,11 +384,11 @@ test "Timeline range copies cannot affect consumed or replacement owners" {
     update.icon = "\xff";
     try std.testing.expectError(error.InvalidArgument, first.update(update));
     update = empty_update;
-    update.clip = @enumFromInt(0);
+    update.clip = @fromBackingInt(@intCast(0));
     try std.testing.expectError(error.InvalidArgument, first.update(update));
     try std.testing.expectError(error.InvalidArgument, first.end(std.math.nan(f32)));
     const marker = try copy.end(-2);
-    try std.testing.expectEqual(@as(u64, 0), @intFromEnum(marker));
+    try std.testing.expectEqual(@as(u64, 0), @backingInt(marker));
     const replacement = try timeline.start(empty_event, 0, .none);
     try std.testing.expect(replacement.token != first.token);
     const before = TestApi.calls;

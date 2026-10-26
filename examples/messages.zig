@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     switch (try net.send(pair[0], "hello", .{ .reliability = .reliable, .no_nagle = true })) {
         .accepted => {}, // Local acceptance is not an acknowledgement of delivery.
         .rejected => |result| {
-            std.debug.print("Send rejected: Steam result {d}\n", .{@intFromEnum(result)});
+            std.debug.print("Send rejected: Steam result {d}\n", .{@backingInt(result)});
             return error.SendRejected;
         },
     }

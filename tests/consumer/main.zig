@@ -20,7 +20,7 @@ export fn consumerShutdown(client: *steam.Client) void {
 // function or changes global networking settings/registers a callback.
 export fn consumerNetworking(client: *steam.Client, connection: u32, payload: [*]const u8, size: usize) bool {
     const net = client.networking();
-    const handle: steam.Networking.Connection = @enumFromInt(connection);
+    const handle: steam.Networking.Connection = @fromBackingInt(@intCast(connection));
     var lanes: [2]steam.Networking.LaneRealTimeStatus = undefined;
     const status = net.realTimeStatus(handle, &lanes) catch return false;
     std.mem.doNotOptimizeAway(status);
@@ -65,15 +65,15 @@ export fn consumerUtils(client: *steam.Client) void {
     std.mem.doNotOptimizeAway(utility.dismissFloating());
     std.mem.doNotOptimizeAway(utility.initFilter());
     var output: [32]u8 = undefined;
-    std.mem.doNotOptimizeAway(utility.filterText(.{ .context = .chat, .source = @enumFromInt(123) }, "text", &output));
+    std.mem.doNotOptimizeAway(utility.filterText(.{ .context = .chat, .source = @fromBackingInt(@intCast(123)) }, "text", &output));
     std.mem.doNotOptimizeAway(utility.defaultConfig());
 }
 export fn consumerInput(client: *steam.Client, handle: u64, manifest: [*:0]const u8) void {
     const controls = client.input();
-    const controller: steam.Input.Controller = @enumFromInt(handle);
-    const set: steam.Input.ActionSet = @enumFromInt(handle);
-    const digital: steam.Input.DigitalAction = @enumFromInt(handle);
-    const analog: steam.Input.AnalogAction = @enumFromInt(handle);
+    const controller: steam.Input.Controller = @fromBackingInt(@intCast(handle));
+    const set: steam.Input.ActionSet = @fromBackingInt(@intCast(handle));
+    const digital: steam.Input.DigitalAction = @fromBackingInt(@intCast(handle));
+    const analog: steam.Input.AnalogAction = @fromBackingInt(@intCast(handle));
     std.mem.doNotOptimizeAway(controls.start(.{ .device_callbacks = true }));
     std.mem.doNotOptimizeAway(controls.runFrame());
     std.mem.doNotOptimizeAway(controls.setManifestPath(std.mem.span(manifest)));
@@ -95,7 +95,7 @@ export fn consumerInput(client: *steam.Client, handle: u64, manifest: [*:0]const
     std.mem.doNotOptimizeAway(controls.digitalOrigins(controller, set, digital, &origins));
     std.mem.doNotOptimizeAway(controls.analogOrigins(controller, set, analog, &origins));
     std.mem.doNotOptimizeAway(controls.inputType(controller));
-    std.mem.doNotOptimizeAway(controls.translateOrigin(.unknown, @enumFromInt(32767)));
+    std.mem.doNotOptimizeAway(controls.translateOrigin(.unknown, @fromBackingInt(@intCast(32767))));
     var text: [1024]u8 = undefined;
     std.mem.doNotOptimizeAway(controls.glyphPNG(.none, .large, .{}, &text));
     std.mem.doNotOptimizeAway(controls.glyphSVG(.none, .{}, &text));
@@ -118,18 +118,18 @@ export fn consumerCloud(client: *steam.Client, index: usize) void {
 }
 export fn consumerProgression(client: *steam.Client, board_value: u64, previous: i32) void {
     const stats = client.stats();
-    const board: steam.Leaderboard = @enumFromInt(board_value);
+    const board: steam.Leaderboard = @fromBackingInt(@intCast(board_value));
     std.mem.doNotOptimizeAway(stats.achievementIcon("achievement"));
     std.mem.doNotOptimizeAway(stats.findLeaderboard("leaderboard"));
     var name: [128]u8 = undefined;
     std.mem.doNotOptimizeAway(stats.leaderboardMetadata(board, &name));
     std.mem.doNotOptimizeAway(stats.downloadLeaderboard(board, .{ .global = .{ .first_rank = 1, .last_rank = 100 } }));
     std.mem.doNotOptimizeAway(stats.downloadLeaderboard(board, .{ .around_user = .{ .before = 10, .after = 20 } }));
-    std.mem.doNotOptimizeAway(stats.downloadLeaderboardUsers(board, &.{@enumFromInt(board_value)}));
+    std.mem.doNotOptimizeAway(stats.downloadLeaderboardUsers(board, &.{@fromBackingInt(@intCast(board_value))}));
     std.mem.doNotOptimizeAway(stats.uploadLeaderboard(board, .{ .method = .force_update, .score = -77, .details = &.{ 1, -1 } }));
     std.mem.doNotOptimizeAway(stats.requestGlobalPercentages());
     std.mem.doNotOptimizeAway(stats.firstGlobalPercentage());
-    std.mem.doNotOptimizeAway(stats.nextGlobalPercentage(@enumFromInt(previous)));
+    std.mem.doNotOptimizeAway(stats.nextGlobalPercentage(@fromBackingInt(@intCast(previous))));
     std.mem.doNotOptimizeAway(stats.globalPercentage("achievement"));
 }
 
@@ -147,7 +147,7 @@ export fn consumerVoice(client: *steam.Client, compressed: [*]u8, bytes: usize, 
 }
 export fn consumerRemotePlay(client: *steam.Client, session_value: u32, friend_value: u64) void {
     const remote = client.remotePlay();
-    const session: steam.RemotePlaySession = @enumFromInt(session_value);
+    const session: steam.RemotePlaySession = @fromBackingInt(@intCast(session_value));
     std.mem.doNotOptimizeAway(remote.sessionCount());
     std.mem.doNotOptimizeAway(remote.sessionAt(0));
     std.mem.doNotOptimizeAway(remote.isTogether(session));
@@ -158,7 +158,7 @@ export fn consumerRemotePlay(client: *steam.Client, session_value: u32, friend_v
     std.mem.doNotOptimizeAway(remote.formFactor(session));
     std.mem.doNotOptimizeAway(remote.resolution(session));
     std.mem.doNotOptimizeAway(remote.showTogetherUi());
-    std.mem.doNotOptimizeAway(remote.invite(.{ .friend = @enumFromInt(friend_value) }));
+    std.mem.doNotOptimizeAway(remote.invite(.{ .friend = @fromBackingInt(@intCast(friend_value)) }));
     std.mem.doNotOptimizeAway(remote.invite(.guest));
 }
 export fn consumerTimeline(client: *steam.Client, range: *steam.Timeline.Range, marker_value: u64) void {
@@ -169,7 +169,7 @@ export fn consumerTimeline(client: *steam.Client, range: *steam.Timeline.Range, 
     std.mem.doNotOptimizeAway(timeline.clearTooltip(0));
     std.mem.doNotOptimizeAway(timeline.instant(event, .{}));
     std.mem.doNotOptimizeAway(timeline.completed(event, .{}));
-    std.mem.doNotOptimizeAway(timeline.remove(@enumFromInt(marker_value)));
+    std.mem.doNotOptimizeAway(timeline.remove(@fromBackingInt(@intCast(marker_value))));
     range.* = timeline.start(event, 0, .none) catch return;
 }
 export fn consumerTimelineRange(range: *const steam.Timeline.Range, finish: bool) void {
@@ -178,7 +178,7 @@ export fn consumerTimelineRange(range: *const steam.Timeline.Range, finish: bool
 }
 export fn consumerWorkshop(client: *steam.Client, item_value: u64, query: *steam.Workshop.Query) void {
     const workshop = client.workshop();
-    const item: steam.WorkshopItem = @enumFromInt(item_value);
+    const item: steam.WorkshopItem = @fromBackingInt(@intCast(item_value));
     std.mem.doNotOptimizeAway(workshop.subscriptionCount(.{}));
     var items: [4]steam.WorkshopItem = undefined;
     std.mem.doNotOptimizeAway(workshop.subscriptions(&items, .{}));
@@ -226,29 +226,29 @@ pub fn main() !void {
     std.mem.doNotOptimizeAway(&consumerWorkshop);
     std.mem.doNotOptimizeAway(&consumerWorkshopQuery);
     std.mem.doNotOptimizeAway(&consumerScreenshots);
-    const query_identity: steam.WorkshopQuery = @enumFromInt(0);
-    const screenshot_identity: steam.ScreenshotHandle = @enumFromInt(73);
-    if (query_identity == .invalid or @intFromEnum(screenshot_identity) != 73) return error.ValueMismatch;
+    const query_identity: steam.WorkshopQuery = @fromBackingInt(@intCast(0));
+    const screenshot_identity: steam.ScreenshotHandle = @fromBackingInt(@intCast(73));
+    if (query_identity == .invalid or @backingInt(screenshot_identity) != 73) return error.ValueMismatch;
     const address = try steam.Networking.Address.parse("127.0.0.1:27015");
     var text: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
     defer text.deinit();
     try address.format(&text.writer);
     if (!std.mem.eql(u8, text.written(), "127.0.0.1:27015")) return error.AddressMismatch;
 
-    const image: steam.ImageHandle = @enumFromInt(37);
-    const unknown: steam.Result = @enumFromInt(-12345);
-    if (@intFromEnum(image) != 37 or @intFromEnum(unknown) != -12345) return error.ValueMismatch;
-    var request = try steam.Request(.lobby_created).init(@enumFromInt(42));
+    const image: steam.ImageHandle = @fromBackingInt(@intCast(37));
+    const unknown: steam.Result = @fromBackingInt(@intCast(-12345));
+    if (@backingInt(image) != 37 or @backingInt(unknown) != -12345) return error.ValueMismatch;
+    var request = try steam.Request(.lobby_created).init(@fromBackingInt(@intCast(42)));
     const event: steam.Event = .{
-        .call = @enumFromInt(42),
+        .call = @fromBackingInt(@intCast(42)),
         .callback_id = 513,
-        .payload = .{ .lobby_created = .{ .lobby = @enumFromInt(123), .result = .access_denied } },
+        .payload = .{ .lobby_created = .{ .lobby = @fromBackingInt(@intCast(123)), .result = .access_denied } },
     };
     const value = (try request.take(&event)) orelse return error.MissingCompletion;
-    if (value.result != .access_denied or @intFromEnum(value.lobby) != 123 or request.isPending()) return error.CompletionMismatch;
+    if (value.result != .access_denied or @backingInt(value.lobby) != 123 or request.isPending()) return error.CompletionMismatch;
     if (try request.take(&event) != null) return error.DuplicateCompletion;
     inline for (.{ .lobby_entered, .lobby_list, .stats_received, .cloud_written, .leaderboard_found, .leaderboard_entries, .leaderboard_uploaded, .global_percentages_ready, .workshop_query_completed }) |kind| {
-        const pending = try steam.Request(kind).init(@enumFromInt(99));
+        const pending = try steam.Request(kind).init(@fromBackingInt(@intCast(99)));
         if (!pending.isPending()) return error.MissingRequest;
     }
 }

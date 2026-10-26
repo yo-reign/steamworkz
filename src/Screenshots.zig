@@ -5,9 +5,7 @@
 const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
-const c = @cImport({
-    @cInclude("screenshots.h");
-});
+const c = @import("steamworkz_c");
 const native = if (@import("builtin").is_test) TestApi else c;
 const Screenshots = @This();
 
@@ -115,7 +113,7 @@ fn available(value: bool) Error!void {
 }
 fn submission(handle: u32) Error!types.ScreenshotHandle {
     if (handle == 0) return error.SubmissionRejected;
-    return @enumFromInt(handle);
+    return @fromBackingInt(@intCast(handle));
 }
 fn dimensions(width: i64, height: i64) Error!void {
     if (width <= 0 or height <= 0 or width > std.math.maxInt(c_int) or height > std.math.maxInt(c_int)) return error.InvalidDimensions;
@@ -227,7 +225,7 @@ test "Screenshots RGB forwards exact mutable storage and preserves submission di
     var rgb: [6]u8 = @splat(0);
     for ([_]u32{ 1, std.math.maxInt(u32) }) |handle| {
         TestApi.handle = handle;
-        try std.testing.expectEqual(handle, @intFromEnum(try screenshots.submitRgbBorrowed(&rgb, 2, 1)));
+        try std.testing.expectEqual(handle, @backingInt(try screenshots.submitRgbBorrowed(&rgb, 2, 1)));
         try std.testing.expectEqual(rgb[0..].ptr, TestApi.rgb_pointer.?);
         try std.testing.expectEqual(@as(u32, 6), TestApi.length);
         try std.testing.expectEqual([2]c_int{ 2, 1 }, TestApi.size);
@@ -264,11 +262,11 @@ test "Screenshots file forwards stable pointers optional NULL and dimensions" {
     try std.testing.expectError(error.InvalidPath, screenshots.submitFile(path, "relative", 2, 1));
     try std.testing.expectError(error.InvalidDimensions, screenshots.submitFile(path, null, -1, 1));
     try std.testing.expectEqual(@as(usize, 0), TestApi.calls);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(try screenshots.submitFile(path, null, 2, 1)));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(try screenshots.submitFile(path, null, 2, 1)));
     try std.testing.expectEqual(path.ptr, TestApi.path_pointer.?);
     try std.testing.expect(TestApi.thumbnail_pointer == null);
     TestApi.handle = std.math.maxInt(u32);
-    try std.testing.expectEqual(TestApi.handle, @intFromEnum(try screenshots.submitFile(path, thumb, 400, 200)));
+    try std.testing.expectEqual(TestApi.handle, @backingInt(try screenshots.submitFile(path, thumb, 400, 200)));
     try std.testing.expectEqual(thumb.ptr, TestApi.thumbnail_pointer.?);
     try std.testing.expectEqual([2]c_int{ 400, 200 }, TestApi.size);
     TestApi.handle = 0;

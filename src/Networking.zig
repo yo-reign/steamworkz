@@ -7,9 +7,7 @@
 const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
-const c = @cImport({
-    @cInclude("networking.h");
-});
+const c = @import("steamworkz_c");
 const Networking = @This();
 
 lease: Context.Lease,
@@ -149,10 +147,10 @@ pub const Info = struct {
     }
     fn fromNative(value: c.SwConnectionInfo) Info {
         return .{
-            .peer_steam_id = @enumFromInt(value.peer_steam_id),
-            .connection = @enumFromInt(value.connection),
-            .listen_socket = @enumFromInt(value.listen_socket),
-            .state = @enumFromInt(value.state),
+            .peer_steam_id = @fromBackingInt(@intCast(value.peer_steam_id)),
+            .connection = @fromBackingInt(@intCast(value.connection)),
+            .listen_socket = @fromBackingInt(@intCast(value.listen_socket)),
+            .state = @fromBackingInt(@intCast(value.state)),
             .end_reason = value.end_reason,
             .peer_identity = value.peer_identity,
             .end_debug = value.end_debug,
@@ -201,7 +199,7 @@ pub const RealTimeStatus = struct {
 
     fn fromNative(value: c.SwConnectionRealTimeStatus) RealTimeStatus {
         return .{
-            .state = @enumFromInt(value.state),
+            .state = @fromBackingInt(@intCast(value.state)),
             .ping_ms = value.ping_ms,
             .connection_quality_local = value.connection_quality_local,
             .connection_quality_remote = value.connection_quality_remote,
@@ -287,7 +285,7 @@ pub const SendOutcome = union(enum) {
     rejected: types.Result,
 
     fn fromNative(result: i32, number: i64) SendOutcome {
-        const value: types.Result = @enumFromInt(result);
+        const value: types.Result = @fromBackingInt(@intCast(result));
         return if (value == .ok) .{ .accepted = number } else .{ .rejected = value };
     }
 };
@@ -316,7 +314,7 @@ pub const BatchSendOutcome = union(enum) {
         if (raw > 0) return .{ .accepted = raw };
         if (raw == 0) return .not_attempted;
         // Compare before negation, including INT64_MIN.
-        if (raw >= -@as(i64, std.math.maxInt(i32))) return .{ .rejected = @enumFromInt(@as(i32, @intCast(-raw))) };
+        if (raw >= -@as(i64, std.math.maxInt(i32))) return .{ .rejected = @fromBackingInt(@intCast(@as(i32, @intCast(-raw)))) };
         return .{ .unexpected_result = raw };
     }
 };
@@ -374,8 +372,8 @@ pub const Message = struct {
             .handle = view.handle,
             .data = if (view.size == 0) &.{} else view.data[0..@intCast(view.size)],
             .metadata = .{
-                .connection = @enumFromInt(view.connection),
-                .peer_steam_id = @enumFromInt(view.peer_steam_id),
+                .connection = @fromBackingInt(@intCast(view.connection)),
+                .peer_steam_id = @fromBackingInt(@intCast(view.peer_steam_id)),
                 .number = view.number,
                 .received_at = view.received_at,
                 .channel = view.channel,
@@ -429,7 +427,7 @@ pub fn listenIP(self: Networking, address: Address) error{ListenFailed}!ListenSo
     const value = address.native();
     const handle = c.sw_networking_listen_ip(&value);
     if (handle == 0) return error.ListenFailed;
-    return @enumFromInt(handle);
+    return @fromBackingInt(@intCast(handle));
 }
 /// ISteamNetworkingSockets::ConnectByIPAddress starts connecting, not a ready link.
 /// Observe connection_changed.info.state; close the handle even after terminal failure.
@@ -438,7 +436,7 @@ pub fn connectIP(self: Networking, address: Address) error{ConnectFailed}!Connec
     const value = address.native();
     const handle = c.sw_networking_connect_ip(&value);
     if (handle == 0) return error.ConnectFailed;
-    return @enumFromInt(handle);
+    return @fromBackingInt(@intCast(handle));
 }
 /// ISteamNetworkingSockets::CreateListenSocketP2P; virtual_port is a logical
 /// endpoint, not a UDP port. Accept/close incoming connections; closeListen when done.
@@ -446,7 +444,7 @@ pub fn listenP2P(self: Networking, virtual_port: u16) error{ListenFailed}!Listen
     self.lease.check();
     const handle = c.sw_networking_listen_p2p(virtual_port);
     if (handle == 0) return error.ListenFailed;
-    return @enumFromInt(handle);
+    return @fromBackingInt(@intCast(handle));
 }
 /// ISteamNetworkingSockets::ConnectP2P targets the peer's logical virtual_port.
 /// Returning a handle is not connection success; observe connection_changed and
@@ -454,15 +452,15 @@ pub fn listenP2P(self: Networking, virtual_port: u16) error{ListenFailed}!Listen
 pub fn connectP2P(self: Networking, peer: types.SteamId, virtual_port: u16) error{ InvalidSteamId, ConnectFailed }!Connection {
     self.lease.check();
     if (peer == .invalid) return error.InvalidSteamId;
-    const handle = c.sw_networking_connect_p2p(@intFromEnum(peer), virtual_port);
+    const handle = c.sw_networking_connect_p2p(@backingInt(peer), virtual_port);
     if (handle == 0) return error.ConnectFailed;
-    return @enumFromInt(handle);
+    return @fromBackingInt(@intCast(handle));
 }
 /// ISteamNetworkingSockets::AcceptConnection for an incoming connecting event.
 /// Preserves the native Result; .ok accepts the attempt, not a completed handshake.
 pub fn accept(self: Networking, connection: Connection) types.Result {
     self.lease.check();
-    return @enumFromInt(c.sw_networking_accept(@intFromEnum(connection)));
+    return @fromBackingInt(@intCast(c.sw_networking_accept(@backingInt(connection))));
 }
 /// ISteamNetworkingSockets::CloseConnection. Terminal callbacks do not release it: close
 /// it even after closed_by_peer or problem_detected_locally. Debug text is
@@ -472,7 +470,7 @@ pub fn close(self: Networking, connection: Connection, options: CloseOptions) er
     if (options.debug) |text| {
         if (text.len >= 128 or std.mem.indexOfScalar(u8, text, 0) != null) return error.InvalidDebugText;
     }
-    if (c.sw_networking_close(@intFromEnum(connection), options.reason, if (options.debug) |text| text.ptr else null, @intFromBool(options.linger)) == 0)
+    if (c.sw_networking_close(@backingInt(connection), options.reason, if (options.debug) |text| text.ptr else null, @intFromBool(options.linger)) == 0)
         return error.OperationFailed;
 }
 /// ISteamNetworkingSockets::CloseListenSocket destroys the listener and closes
@@ -480,7 +478,7 @@ pub fn close(self: Networking, connection: Connection, options: CloseOptions) er
 /// separately before this call.
 pub fn closeListen(self: Networking, socket: ListenSocket) error{OperationFailed}!void {
     self.lease.check();
-    if (c.sw_networking_close_listen(@intFromEnum(socket)) == 0) return error.OperationFailed;
+    if (c.sw_networking_close_listen(@backingInt(socket)) == 0) return error.OperationFailed;
 }
 /// Both returned connections require explicit close. With network_loopback=false
 /// the SDK uses an in-process pair; this still requires an initialized client.
@@ -489,7 +487,7 @@ pub fn socketPair(self: Networking, options: SocketPairOptions) error{OperationF
     var first: u32 = 0;
     var second: u32 = 0;
     if (c.sw_networking_socket_pair(&first, &second, @intFromBool(options.network_loopback)) == 0) return error.OperationFailed;
-    return .{ @enumFromInt(first), @enumFromInt(second) };
+    return .{ @fromBackingInt(@intCast(first)), @fromBackingInt(@intCast(second)) };
 }
 /// ISteamNetworkingSockets::SendMessageToConnection copies data during the call;
 /// no borrowed payload survives return. Sends on lane zero; acceptance is not delivery.
@@ -507,7 +505,7 @@ pub fn sendRaw(self: Networking, connection: Connection, data: []const u8, flags
 fn sendMessage(connection: Connection, data: []const u8, flags: i32) error{TooLarge}!SendOutcome {
     const size = std.math.cast(u32, data.len) orelse return error.TooLarge;
     var number: i64 = -1;
-    const result = c.sw_networking_send(@intFromEnum(connection), data.ptr, size, flags, &number);
+    const result = c.sw_networking_send(@backingInt(connection), data.ptr, size, flags, &number);
     return SendOutcome.fromNative(result, number);
 }
 /// Configure 1..max_lanes outbound lanes. Native rejects reducing the count and
@@ -525,8 +523,8 @@ fn configureLanesWith(self: Networking, connection: Connection, lanes: []const L
         out.* = .{ .priority = lane.priority, .weight = lane.weight };
     }
     var result: i32 = undefined;
-    try checkStatusBridge(configure(@intFromEnum(connection), &native, @intCast(lanes.len), &result));
-    return @enumFromInt(result);
+    try checkStatusBridge(configure(@backingInt(connection), &native, @intCast(lanes.len), &result));
+    return @fromBackingInt(@intCast(result));
 }
 /// Validate all descriptors before any native access, then copy payloads into
 /// SDK-allocated messages and transfer all with one call. Empty payloads use a
@@ -547,7 +545,7 @@ fn sendBatchWith(self: Networking, messages: []const BatchSend, outcomes: []Batc
         if (message.payload.len > max_send_size) return error.TooLarge;
         if (message.lane >= max_lanes) return error.InvalidLane;
         out.* = .{
-            .connection = @intFromEnum(message.connection),
+            .connection = @backingInt(message.connection),
             .data = message.payload.ptr,
             .size = @intCast(message.payload.len),
             .lane = message.lane,
@@ -565,7 +563,7 @@ fn sendBatchWith(self: Networking, messages: []const BatchSend, outcomes: []Batc
 /// Preserves the native Result; .ok is not a delivery acknowledgement.
 pub fn flush(self: Networking, connection: Connection) types.Result {
     self.lease.check();
-    return @enumFromInt(c.sw_networking_flush(@intFromEnum(connection)));
+    return @fromBackingInt(@intCast(c.sw_networking_flush(@backingInt(connection))));
 }
 
 pub const ReceiveError = error{ TooManyMessages, ReceiveFailed, InvalidMessage };
@@ -575,14 +573,14 @@ pub const ReceiveError = error{ TooManyMessages, ReceiveFailed, InvalidMessage }
 /// immediately and release before client close or slot reuse. Errors release any
 /// native messages acquired by this call; no partial batch escapes.
 pub fn receive(self: Networking, connection: Connection, out: []Message) ReceiveError!MessageBatch {
-    return self.receiveBatch(@intFromEnum(connection), false, out);
+    return self.receiveBatch(@backingInt(connection), false, out);
 }
 /// ISteamNetworkingSockets::ReceiveMessagesOnPollGroup. Same slot/cleanup contract
 /// as receive: defer batch.deinit(), before client close or reusing storage.
 /// Each message's metadata.connection identifies its source; destroying the group
 /// does not release already received messages or close its connections.
 pub fn receivePollGroup(self: Networking, group: PollGroup, out: []Message) ReceiveError!MessageBatch {
-    return self.receiveBatch(@intFromEnum(group), true, out);
+    return self.receiveBatch(@backingInt(group), true, out);
 }
 fn receiveBatch(self: Networking, handle: u32, poll_group: bool, out: []Message) ReceiveError!MessageBatch {
     self.lease.check();
@@ -608,7 +606,7 @@ fn receiveBatch(self: Networking, handle: u32, poll_group: bool, out: []Message)
 pub fn connectionInfo(self: Networking, connection: Connection) error{InfoUnavailable}!Info {
     self.lease.check();
     var value: c.SwConnectionInfo = undefined;
-    if (c.sw_networking_connection_info(@intFromEnum(connection), &value) == 0) return error.InfoUnavailable;
+    if (c.sw_networking_connection_info(@backingInt(connection), &value) == 0) return error.InfoUnavailable;
     return Info.fromNative(value);
 }
 /// ISteamNetworkingSockets::GetConnectionRealTimeStatus.
@@ -625,8 +623,8 @@ fn realTimeStatusWith(self: Networking, connection: Connection, lanes: []LaneRea
     var value: c.SwConnectionRealTimeStatus = undefined;
     var native_lanes: [max_lanes]c.SwLaneRealTimeStatus = undefined;
     var result: i32 = undefined;
-    try checkStatusBridge(query(@intFromEnum(connection), &value, if (lanes.len == 0) null else &native_lanes, @intCast(lanes.len), &result));
-    const native_result: types.Result = @enumFromInt(result);
+    try checkStatusBridge(query(@backingInt(connection), &value, if (lanes.len == 0) null else &native_lanes, @intCast(lanes.len), &result));
+    const native_result: types.Result = @fromBackingInt(@intCast(result));
     if (native_result != .ok) return .{ .rejected = native_result };
     for (lanes, native_lanes[0..lanes.len]) |*lane, native_lane| lane.* = LaneRealTimeStatus.fromNative(native_lane);
     return .{ .status = RealTimeStatus.fromNative(value) };
@@ -642,7 +640,7 @@ fn detailedStatusWith(self: Networking, connection: Connection, buffer: []u8, co
     self.lease.check();
     const capacity = try detailedStatusCapacity(buffer.len);
     var result: i32 = undefined;
-    try checkStatusBridge(query(@intFromEnum(connection), if (buffer.len == 0) null else buffer.ptr, capacity, &result));
+    try checkStatusBridge(query(@backingInt(connection), if (buffer.len == 0) null else buffer.ptr, capacity, &result));
     if (result == -1) return .failed;
     if (result < -1) return .{ .unexpected_result = result };
     if (result > 0) return .{ .required_capacity = @intCast(result) };
@@ -664,7 +662,7 @@ fn checkStatusBridge(result: c_int) error{ Unavailable, BridgeFailed }!void {
 pub fn listenAddress(self: Networking, socket: ListenSocket) error{AddressUnavailable}!Address {
     self.lease.check();
     var value: c.SwAddress = undefined;
-    if (c.sw_networking_listen_address(@intFromEnum(socket), &value) == 0) return error.AddressUnavailable;
+    if (c.sw_networking_listen_address(@backingInt(socket), &value) == 0) return error.AddressUnavailable;
     return Address.fromNative(value);
 }
 /// ISteamNetworkingSockets::CreatePollGroup creates an empty receive group.
@@ -673,19 +671,19 @@ pub fn createPollGroup(self: Networking) error{PollGroupFailed}!PollGroup {
     self.lease.check();
     const group = c.sw_networking_create_poll_group();
     if (group == 0) return error.PollGroupFailed;
-    return @enumFromInt(group);
+    return @fromBackingInt(@intCast(group));
 }
 /// ISteamNetworkingSockets::DestroyPollGroup detaches, but does not close, its
 /// connections. Already received batches still need their own deinit.
 pub fn destroyPollGroup(self: Networking, group: PollGroup) error{OperationFailed}!void {
     self.lease.check();
-    if (c.sw_networking_destroy_poll_group(@intFromEnum(group)) == 0) return error.OperationFailed;
+    if (c.sw_networking_destroy_poll_group(@backingInt(group)) == 0) return error.OperationFailed;
 }
 /// ISteamNetworkingSockets::SetConnectionPollGroup assigns one group per connection.
 /// Use .invalid to detach. Destroying a group does not close its connections.
 pub fn setPollGroup(self: Networking, connection: Connection, group: PollGroup) error{OperationFailed}!void {
     self.lease.check();
-    if (c.sw_networking_set_poll_group(@intFromEnum(connection), @intFromEnum(group)) == 0) return error.OperationFailed;
+    if (c.sw_networking_set_poll_group(@backingInt(connection), @backingInt(group)) == 0) return error.OperationFailed;
 }
 /// ISteamNetworkingUtils::InitRelayNetworkAccess begins relay preparation explicitly.
 /// Success means invocation only; inspect relayStatus or relay_status events
@@ -701,24 +699,24 @@ pub fn relayStatus(self: Networking) error{Unavailable}!RelayStatus {
     var value: c.SwRelayStatus = undefined;
     if (c.sw_networking_relay_status(&value) == 0) return error.Unavailable;
     return .{
-        .availability = @enumFromInt(value.availability),
+        .availability = @fromBackingInt(@intCast(value.availability)),
         .ping_measurement_in_progress = value.ping_measurement_in_progress != 0,
-        .network_config = @enumFromInt(value.network_config),
-        .any_relay = @enumFromInt(value.any_relay),
+        .network_config = @fromBackingInt(@intCast(value.network_config)),
+        .any_relay = @fromBackingInt(@intCast(value.any_relay)),
         .debug = value.debug,
     };
 }
 
 fn analyzeDeclarations(comptime T: type) void {
-    inline for (comptime std.meta.declarations(T)) |decl| {
-        const value = @field(T, decl.name);
+    inline for (comptime std.meta.declarations(T)) |decl_name| {
+        const value = @field(T, decl_name);
         if (@TypeOf(value) == type) {
             switch (@typeInfo(value)) {
                 .@"struct", .@"enum", .@"union", .@"opaque" => analyzeDeclarations(value),
                 else => {},
             }
         } else {
-            _ = &@field(T, decl.name);
+            _ = &@field(T, decl_name);
         }
     }
 }
@@ -736,10 +734,10 @@ test "Info owns copied values and preserves unknown states and unterminated text
     native.end_debug = @splat('d');
     const info = Info.fromNative(native);
     native.end_debug[0] = 0;
-    try std.testing.expectEqual(@as(u32, 123), @intFromEnum(info.connection));
-    try std.testing.expectEqual(@as(u32, 456), @intFromEnum(info.listen_socket));
-    try std.testing.expectEqual(@as(u64, 76561198000000000), @intFromEnum(info.peer_steam_id));
-    try std.testing.expectEqual(@as(i32, 12345), @intFromEnum(info.state));
+    try std.testing.expectEqual(@as(u32, 123), @backingInt(info.connection));
+    try std.testing.expectEqual(@as(u32, 456), @backingInt(info.listen_socket));
+    try std.testing.expectEqual(@as(u64, 76561198000000000), @backingInt(info.peer_steam_id));
+    try std.testing.expectEqual(@as(i32, 12345), @backingInt(info.state));
     try std.testing.expectEqual(@as(i32, 4321), info.end_reason);
     try std.testing.expectEqual(@as(usize, 128), info.peerIdentity().len);
     try std.testing.expectEqual(@as(usize, 128), info.endDebug().len);
@@ -790,9 +788,9 @@ test "send options preserve independent flags and reject invalid reliability com
 }
 
 test "send outcomes expose a number only on acceptance and preserve unknown rejections" {
-    try std.testing.expectEqual(@as(i64, 71), SendOutcome.fromNative(@intFromEnum(types.Result.ok), 71).accepted);
-    try std.testing.expectEqual(types.Result.limit_exceeded, SendOutcome.fromNative(@intFromEnum(types.Result.limit_exceeded), -1).rejected);
-    try std.testing.expectEqual(@as(i32, 123456), @intFromEnum(SendOutcome.fromNative(123456, -1).rejected));
+    try std.testing.expectEqual(@as(i64, 71), SendOutcome.fromNative(@backingInt(types.Result.ok), 71).accepted);
+    try std.testing.expectEqual(types.Result.limit_exceeded, SendOutcome.fromNative(@backingInt(types.Result.limit_exceeded), -1).rejected);
+    try std.testing.expectEqual(@as(i32, 123456), @backingInt(SendOutcome.fromNative(123456, -1).rejected));
 }
 
 test "batch cleanup releases unread messages after an early error without double release" {
@@ -957,12 +955,13 @@ test "realTimeStatus copies all fields preserving signed readings and float bits
         .max_jitter_us = -59,
     };
     const status = RealTimeStatus.fromNative(native);
-    try std.testing.expectEqual(@as(i32, 12345), @intFromEnum(status.state));
-    inline for (std.meta.fields(RealTimeStatus)) |field| {
-        if (field.type == f32) {
-            try std.testing.expectEqual(@as(u32, @bitCast(@field(native, field.name))), @as(u32, @bitCast(@field(status, field.name))));
-        } else if (field.type != State) {
-            try std.testing.expectEqual(@field(native, field.name), @field(status, field.name));
+    try std.testing.expectEqual(@as(i32, 12345), @backingInt(status.state));
+    const info = @typeInfo(RealTimeStatus).@"struct";
+    inline for (info.field_names, info.field_types) |field_name, Field| {
+        if (Field == f32) {
+            try std.testing.expectEqual(@as(u32, @bitCast(@field(native, field_name))), @as(u32, @bitCast(@field(status, field_name))));
+        } else if (Field != State) {
+            try std.testing.expectEqual(@field(native, field_name), @field(status, field_name));
         }
     }
     const lane = LaneRealTimeStatus.fromNative(.{
@@ -1011,8 +1010,8 @@ test "realTimeStatus zero prefix maximum and rejections commit only native succe
     for ([_]usize{ 0, 1, 3, max_lanes }) |count| {
         @memset(&lanes, sentinel);
         Fixture.count = @intCast(count);
-        const result = try networking.realTimeStatusWith(@enumFromInt(79), lanes[0..count], Fixture.query);
-        try std.testing.expectEqual(@as(i32, 12345), @intFromEnum(result.status.state));
+        const result = try networking.realTimeStatusWith(@fromBackingInt(@intCast(79)), lanes[0..count], Fixture.query);
+        try std.testing.expectEqual(@as(i32, 12345), @backingInt(result.status.state));
         for (lanes[0..count], 0..) |lane, i| {
             try std.testing.expectEqualDeep(LaneRealTimeStatus{
                 .pending_unreliable = -100 - @as(i32, @intCast(i)),
@@ -1025,18 +1024,18 @@ test "realTimeStatus zero prefix maximum and rejections commit only native succe
     }
     const saved = lanes;
     Fixture.count = 3;
-    for ([_]i32{ @intFromEnum(types.Result.no_connection), @intFromEnum(types.Result.invalid_parameter), 123456, -123456 }) |result| {
+    for ([_]i32{ @backingInt(types.Result.no_connection), @backingInt(types.Result.invalid_parameter), 123456, -123456 }) |result| {
         Fixture.result = result;
-        try std.testing.expectEqual(result, @intFromEnum((try networking.realTimeStatusWith(@enumFromInt(79), lanes[0..3], Fixture.query)).rejected));
+        try std.testing.expectEqual(result, @backingInt((try networking.realTimeStatusWith(@fromBackingInt(@intCast(79)), lanes[0..3], Fixture.query)).rejected));
         try std.testing.expectEqualDeep(saved, lanes);
     }
     Fixture.bridge = 0;
-    try std.testing.expectError(error.Unavailable, networking.realTimeStatusWith(@enumFromInt(79), lanes[0..3], Fixture.query));
+    try std.testing.expectError(error.Unavailable, networking.realTimeStatusWith(@fromBackingInt(@intCast(79)), lanes[0..3], Fixture.query));
     Fixture.bridge = -1;
-    try std.testing.expectError(error.BridgeFailed, networking.realTimeStatusWith(@enumFromInt(79), lanes[0..3], Fixture.query));
+    try std.testing.expectError(error.BridgeFailed, networking.realTimeStatusWith(@fromBackingInt(@intCast(79)), lanes[0..3], Fixture.query));
     try std.testing.expectEqualDeep(saved, lanes);
     const calls = Fixture.calls;
-    try std.testing.expectError(error.TooManyLanes, networking.realTimeStatusWith(@enumFromInt(79), &lanes, Fixture.query));
+    try std.testing.expectError(error.TooManyLanes, networking.realTimeStatusWith(@fromBackingInt(@intCast(79)), &lanes, Fixture.query));
     // The actual public entry point must also reject before resolving Steam.
     try std.testing.expectError(error.TooManyLanes, networking.realTimeStatus(.invalid, &lanes));
     try std.testing.expectEqual(calls, Fixture.calls);
@@ -1067,7 +1066,7 @@ test "detailedStatus caller storage query completion truncation and raw failures
     defer context.release();
     const networking: Networking = .{ .lease = context.lease() };
     var buffer = [_]u8{ 'a', 'b', 'c', 'd', '!' };
-    const connection: Connection = @enumFromInt(79);
+    const connection: Connection = @fromBackingInt(@intCast(79));
     try std.testing.expectEqual(@as(usize, 4), (try networking.detailedStatusWith(connection, buffer[0..0], Fixture.query)).required_capacity);
     Fixture.capacity = 4;
     Fixture.result = 0;
@@ -1137,7 +1136,7 @@ test "configureLanes validates before native and preserves full priorities weigh
     }
     for ([_]i32{ 8, 3, 255, std.math.maxInt(i32), std.math.minInt(i32) }) |result| {
         Fixture.result = result;
-        try std.testing.expectEqual(result, @intFromEnum(try networking.configureLanesWith(.invalid, lanes[0..1], Fixture.configure)));
+        try std.testing.expectEqual(result, @backingInt(try networking.configureLanesWith(.invalid, lanes[0..1], Fixture.configure)));
     }
     Fixture.bridge = 0;
     try std.testing.expectError(error.Unavailable, networking.configureLanesWith(.invalid, lanes[0..1], Fixture.configure));
@@ -1175,7 +1174,7 @@ test "sendBatch validates the whole batch and publishes only transferred outcome
     const networking: Networking = .{ .lease = context.lease() };
     var messages: [max_send_batch + 1]BatchSend = undefined;
     for (&messages, 0..) |*message, i| message.* = .{
-        .connection = @enumFromInt(if (i % 9 == 1 or i % 9 == 2) 0 else i + 1),
+        .connection = @fromBackingInt(@intCast(if (i % 9 == 1 or i % 9 == 2) 0 else i + 1)),
         .payload = if (i % 2 == 0) "copy me" else "",
         .lane = if (i % 2 == 0) 254 else 0,
         .options = if (i % 2 == 0) .{ .reliability = .reliable, .no_nagle = true } else .{ .no_delay = true, .use_current_thread = true },
@@ -1193,14 +1192,14 @@ test "sendBatch validates the whole batch and publishes only transferred outcome
         try std.testing.expectEqualDeep(sentinel, outcomes[count]);
     }
     try std.testing.expectEqual(@as(i64, 71), outcomes[0].accepted);
-    try std.testing.expectEqual(@as(i32, 8), @intFromEnum(outcomes[1].rejected));
+    try std.testing.expectEqual(@as(i32, 8), @backingInt(outcomes[1].rejected));
     try std.testing.expectEqual(BatchSendOutcome.not_attempted, outcomes[2]);
     try std.testing.expectEqual(@as(i64, 73), outcomes[3].accepted);
-    try std.testing.expectEqual(@as(i32, 255), @intFromEnum(outcomes[4].rejected));
+    try std.testing.expectEqual(@as(i32, 255), @backingInt(outcomes[4].rejected));
     try std.testing.expectEqual(std.math.maxInt(i64), outcomes[5].accepted);
     try std.testing.expectEqual(std.math.minInt(i64), outcomes[6].unexpected_result);
     try std.testing.expectEqual(@as(i64, -2147483648), outcomes[7].unexpected_result);
-    try std.testing.expectEqual(std.math.maxInt(i32), @intFromEnum(outcomes[8].rejected));
+    try std.testing.expectEqual(std.math.maxInt(i32), @backingInt(outcomes[8].rejected));
     const saved = outcomes;
     for ([_]c_int{ -2, 0, -1 }) |bridge| {
         Fixture.bridge = bridge;

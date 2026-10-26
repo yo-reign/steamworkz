@@ -3,9 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Context = @import("Context.zig");
-const c = @cImport({
-    @cInclude("networking_debug.h");
-});
+const c = @import("steamworkz_c");
 
 /// Borrowed owner-thread facade. Client storage must remain stable and alive.
 /// Process-wide diagnostics only: records have no session, start-interval or
@@ -55,7 +53,7 @@ pub const Capture = struct {
     pub fn start(self: Capture, level: Level) error{ AlreadyStarted, InvalidLevel, Unavailable }!void {
         self.lease.check();
         if (started) return error.AlreadyStarted;
-        const raw = @intFromEnum(level);
+        const raw = @backingInt(level);
         if (raw < 1 or raw > 8) return error.InvalidLevel;
         // Admission precedes registration so synchronous registration output is
         // captured. Failure always closes admission; persistent state is not reset.
@@ -140,7 +138,7 @@ fn enqueue(level: i32, message: ?[*]const u8) void {
         return;
     }
     const record = &queue[(head + count) % queue_capacity];
-    record.level = @enumFromInt(level);
+    record.level = @fromBackingInt(@intCast(level));
     record.len = 0;
     record.truncated = false;
     if (message) |text| {
@@ -233,15 +231,15 @@ test "NetworkingDebug registration validation, unavailable removal, and idempote
     discardTestRecords();
     shutdown(context.lease());
     try std.testing.expectEqual(0, test_native.stops);
-    try std.testing.expectError(error.InvalidLevel, capture.start(@enumFromInt(0)));
-    try std.testing.expectError(error.InvalidLevel, capture.start(@enumFromInt(9)));
+    try std.testing.expectError(error.InvalidLevel, capture.start(@fromBackingInt(@intCast(0))));
+    try std.testing.expectError(error.InvalidLevel, capture.start(@fromBackingInt(@intCast(9))));
     try std.testing.expectEqual(0, test_native.starts);
     test_native.available = false;
     try std.testing.expectError(error.Unavailable, capture.start(.warning));
     try std.testing.expectEqual(0, admission.load(.acquire));
     test_native.available = true;
     for (1..9) |level| {
-        try capture.start(@enumFromInt(level));
+        try capture.start(@fromBackingInt(@intCast(level)));
         try std.testing.expectEqual(@as(i32, @intCast(level)), test_native.level);
         try std.testing.expectError(error.AlreadyStarted, capture.start(.message));
         try capture.stop();
@@ -276,11 +274,11 @@ test "NetworkingDebug FIFO, raw bytes, exact fit, bounded oversized copy and own
     output[4].len = 77;
     const first = drainQueue(output[0..1]);
     try std.testing.expectEqual(1, first.count);
-    try std.testing.expectEqual(12345, @intFromEnum(output[0].level));
+    try std.testing.expectEqual(12345, @backingInt(output[0].level));
     try std.testing.expectEqualStrings("", output[0].bytes());
     const rest = drainQueue(output[1..]);
     try std.testing.expectEqual(3, rest.count);
-    try std.testing.expectEqual(-42, @intFromEnum(output[1].level));
+    try std.testing.expectEqual(-42, @backingInt(output[1].level));
     try std.testing.expectEqualStrings("raw\xff", output[1].bytes());
     try std.testing.expectEqualSlices(u8, &exact, output[2].bytes());
     try std.testing.expect(!output[2].truncated);

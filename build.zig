@@ -1,4 +1,5 @@
 const std = @import("std");
+const Translator = @import("translate_c").Translator;
 
 const sources: []const []const u8 = &.{ "c/core.cpp", "c/networking.cpp", "c/networking_config.cpp", "c/networking_debug.cpp", "c/lobbies.cpp", "c/services.cpp", "c/utils.cpp", "c/input.cpp", "c/voice.cpp", "c/remote_play.cpp", "c/timeline.cpp", "c/workshop.cpp", "c/screenshots.cpp" };
 const cpp_flags: []const []const u8 = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-Wall", "-Wextra", "-Werror" };
@@ -9,7 +10,9 @@ pub fn build(b: *std.Build) void {
     const sdk = b.option([]const u8, "sdk", "Official Steamworks SDK directory (overrides STEAMWORKS_SDK)") orelse
         b.graph.environ_map.get("STEAMWORKS_SDK") orelse
         @panic("Steamworkz requires the external Steamworks SDK 1.65: pass -Dsdk=/absolute/path/to/sdk or set STEAMWORKS_SDK to the directory containing public and redistributable_bin");
-    const sdk_path = b.pathFromRoot(sdk);
+    const sdk_path = b.pathResolve(&.{ b.fmt("{f}", .{b.root}), sdk });
+    const translate_c = b.dependency("translate_c", .{ .target = b.graph.host, .optimize = .fast });
+    const bridge = translateBridge(b, translate_c, target, optimize);
     const runtime = runtimeLibrary(b, target.result, sdk_path);
     const use_llvm: ?bool = if (target.result.os.tag == .linux) true else null;
     addToolingStep(b, sdk_path);
@@ -20,6 +23,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    module.addImport("steamworkz_c", bridge);
     configureModule(b, module, sdk_path, runtime);
     module.addCSourceFiles(.{ .files = sources, .flags = cpp_flags });
 
@@ -47,6 +51,7 @@ pub fn build(b: *std.Build) void {
         .use_llvm = use_llvm,
         .use_lld = use_llvm,
     });
+    configureRunner(b, translate_c, runner.root_module, target, optimize);
     compile_tests.dependOn(&runner.step);
     const self_test = b.addRunArtifact(runner);
     self_test.addArg("self-test");
@@ -54,6 +59,7 @@ pub fn build(b: *std.Build) void {
     lifecycle.dependOn(&self_test.step);
     for ([_][]const u8{ "wrong-thread", "moved-client", "stale-lease", "outstanding-message", "released-message" }) |name| {
         const fatal_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+        fatal_module.addImport("steamworkz_c", bridge);
         configureModule(b, fatal_module, sdk_path, runtime);
         fatal_module.addCSourceFiles(.{ .files = sources, .flags = cpp_flags });
         const options = b.addOptions();
@@ -65,13 +71,13 @@ pub fn build(b: *std.Build) void {
         // The runner launches these directly, without the build test-server protocol.
         const check = b.addRunArtifact(runner);
         check.addArgs(&.{ "check", name });
-        check.addArtifactArg(fatal);
+        check.addArtifactArg2(fatal, .{});
         configureRun(b, check, target.result, sdk_path);
         lifecycle.dependOn(&check.step);
     }
-    test_step.dependOn(addNetworkingGuards(b, target, optimize, runner, compile_tests));
-    test_step.dependOn(addPlatformGuards(b, target, optimize, runner, compile_tests));
-    test_step.dependOn(addCapabilityGuards(b, target, optimize, runner, compile_tests));
+    test_step.dependOn(addNetworkingGuards(b, target, optimize, bridge, runner, compile_tests));
+    test_step.dependOn(addPlatformGuards(b, target, optimize, bridge, runner, compile_tests));
+    test_step.dependOn(addCapabilityGuards(b, target, optimize, bridge, runner, compile_tests));
     const control = b.addTest(.{ .name = "lifecycle-control", .root_module = module, .filters = &.{"lifecycle control "}, .use_llvm = use_llvm, .use_lld = use_llvm });
     configureLinkedArtifact(control, target.result);
     const control_run = b.addRunArtifact(control);
@@ -206,13 +212,77 @@ pub fn build(b: *std.Build) void {
     const app = b.option(u32, "app-id", "Development App ID used only by the explicit live-test step") orelse 480;
     live_run.setEnvironmentVariable("SteamAppId", b.fmt("{d}", .{app}));
     live_run.setEnvironmentVariable("SteamGameId", b.fmt("{d}", .{app}));
-    if (b.args) |args| live_run.addArgs(args);
+    live_run.addPassthruArgs();
     b.step("live-test", "Explicit opt-in: run bounded tests with a running Steam client").dependOn(&live_run.step);
 }
 
-fn addNetworkingGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
+fn translateBridge(b: *std.Build, translate_c: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {
+    // Translate only our owned C boundary, never Valve's C++ SDK headers.
+    const header = b.addWriteFiles().add("steamworkz_bridge.h",
+        \\#include "core.h"
+        \\#include "networking.h"
+        \\#include "networking_config.h"
+        \\#include "networking_debug.h"
+        \\#include "lobbies.h"
+        \\#include "services.h"
+        \\#include "utils.h"
+        \\#include "input.h"
+        \\#include "voice.h"
+        \\#include "remote_play.h"
+        \\#include "timeline.h"
+        \\#include "workshop.h"
+        \\#include "screenshots.h"
+        \\
+    );
+    const bridge: Translator = .init(translate_c, .{
+        .c_source_file = header,
+        .target = target,
+        .optimize = optimize,
+    });
+    bridge.addIncludePath(b.path("c"));
+    return bridge.mod;
+}
+
+fn configureRunner(b: *std.Build, translate_c: *std.Build.Dependency, module: *std.Build.Module, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) void {
+    if (target.result.os.tag == .windows) return;
+    const headers = b.addWriteFiles();
+    // Keep Darwin's unrelated Mach bitfields out of the spawn declaration import.
+    const spawn: Translator = .init(translate_c, .{
+        .c_source_file = headers.add("spawn_api.h",
+            \\#define _POSIX_C_SOURCE 200809L
+            \\#include <spawn.h>
+            \\
+        ),
+        .target = target,
+        .optimize = optimize,
+    });
+    const posix: Translator = .init(translate_c, .{
+        .c_source_file = headers.add("posix_api.h",
+            \\#ifdef __linux__
+            \\#undef _FORTIFY_SOURCE
+            \\#endif
+            \\#include <fcntl.h>
+            \\#include <unistd.h>
+            \\#include <paths.h>
+            \\#include <stdlib.h>
+            \\#include <sys/stat.h>
+            \\#include <sys/resource.h>
+            \\#ifdef __APPLE__
+            \\#include <crt_externs.h>
+            \\#endif
+            \\
+        ),
+        .target = target,
+        .optimize = optimize,
+    });
+    module.addImport("spawn_api", spawn.mod);
+    module.addImport("posix_api", posix.mod);
+}
+
+fn addNetworkingGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, bridge: *std.Build.Module, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
     const use_llvm: ?bool = if (target.result.os.tag == .linux) true else null;
     const module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    module.addImport("steamworkz_c", bridge);
     module.addIncludePath(b.path("c"));
     module.addCSourceFile(.{ .file = b.path("tests/networking_guards.cpp"), .flags = cpp_flags });
     const options = b.addOptions();
@@ -246,9 +316,9 @@ fn addNetworkingGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize
     }) |case| {
         for (methods) |method| {
             const check = b.addRunArtifact(runner);
-            check.step.name = b.fmt("networking guard {s}/{s}", .{ case.lease, method });
+            check.setName(b.fmt("networking guard {s}/{s}", .{ case.lease, method }));
             check.addArgs(&.{ "check", case.diagnostic });
-            check.addArtifactArg(executable);
+            check.addArtifactArg2(executable, .{});
             check.setEnvironmentVariable("STEAMWORKZ_GUARD_LEASE", case.lease);
             check.setEnvironmentVariable("STEAMWORKZ_GUARD_METHOD", method);
             step.dependOn(&check.step);
@@ -257,9 +327,10 @@ fn addNetworkingGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize
     return step;
 }
 
-fn addPlatformGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
+fn addPlatformGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, bridge: *std.Build.Module, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
     const use_llvm: ?bool = if (target.result.os.tag == .linux) true else null;
     const module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    module.addImport("steamworkz_c", bridge);
     module.addIncludePath(b.path("c"));
     module.addCSourceFile(.{ .file = b.path("tests/platform_guards.cpp"), .flags = cpp_flags });
     const options = b.addOptions();
@@ -301,27 +372,28 @@ fn addPlatformGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: 
             // Client owns the current Context, not a captured generation lease.
             if (std.mem.eql(u8, case.lease, "stale") and std.mem.startsWith(u8, method, "client_")) continue;
             const check = b.addRunArtifact(runner);
-            check.step.name = b.fmt("platform guard {s}/{s}", .{ case.lease, method });
+            check.setName(b.fmt("platform guard {s}/{s}", .{ case.lease, method }));
             check.addArgs(&.{ "check", case.diagnostic });
-            check.addArtifactArg(executable);
+            check.addArtifactArg2(executable, .{});
             check.setEnvironmentVariable("STEAMWORKZ_GUARD_LEASE", case.lease);
             check.setEnvironmentVariable("STEAMWORKZ_GUARD_METHOD", method);
             step.dependOn(&check.step);
         }
     }
     const close_check = b.addRunArtifact(runner);
-    close_check.step.name = "platform guard outstanding cloud batch";
+    close_check.setName("platform guard outstanding cloud batch");
     close_check.addArgs(&.{ "check", "outstanding-cloud-batch" });
-    close_check.addArtifactArg(executable);
+    close_check.addArtifactArg2(executable, .{});
     close_check.setEnvironmentVariable("STEAMWORKZ_GUARD_LEASE", "owner");
     close_check.setEnvironmentVariable("STEAMWORKZ_GUARD_METHOD", "client_close_batch");
     step.dependOn(&close_check.step);
     return step;
 }
 
-fn addCapabilityGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
+fn addCapabilityGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, bridge: *std.Build.Module, runner: *std.Build.Step.Compile, compile_tests: *std.Build.Step) *std.Build.Step {
     const use_llvm: ?bool = if (target.result.os.tag == .linux) true else null;
     const module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    module.addImport("steamworkz_c", bridge);
     module.addIncludePath(b.path("c"));
     module.addCSourceFile(.{ .file = b.path("tests/capability_guards.cpp"), .flags = cpp_flags });
     const options = b.addOptions();
@@ -382,9 +454,9 @@ fn addCapabilityGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize
         }) |case| {
             if (std.mem.eql(u8, case.lease, "stale") and std.mem.startsWith(u8, method, "client_")) continue;
             const check = b.addRunArtifact(runner);
-            check.step.name = b.fmt("capability guard {s}/{s}", .{ case.lease, method });
+            check.setName(b.fmt("capability guard {s}/{s}", .{ case.lease, method }));
             check.addArgs(&.{ "check", case.diagnostic });
-            check.addArtifactArg(executable);
+            check.addArtifactArg2(executable, .{});
             check.setEnvironmentVariable("STEAMWORKZ_GUARD_LEASE", case.lease);
             check.setEnvironmentVariable("STEAMWORKZ_GUARD_METHOD", method);
             step.dependOn(&check.step);
@@ -393,16 +465,19 @@ fn addCapabilityGuards(b: *std.Build, target: std.Build.ResolvedTarget, optimize
     return step;
 }
 
-fn addConsumerTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, sdk: []const u8) *std.Build.Step {
+fn addConsumerTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, sdk: []const u8) *std.Build.Step {
     // Build a separate project through the public dependency recipe. Only
     // installation and compile-fail probes run, never package tests or target binaries.
-    // Bound nested compiler parallelism independently of the outer build graph.
-    const run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "install", "check-negative", "-j2", "--build-file" });
-    run.addFileArg(b.path("tests/consumer/build.zig"));
-    // Cache paths are relative to the build process cwd, which this child inherits.
-    // Re-rooting at build.zig is wrong when --build-file names a different directory.
-    run.addArgs(&.{ "--cache-dir", b.cache_root.path orelse "." });
-    run.addArgs(&.{ "--global-cache-dir", b.graph.global_cache_root.path orelse "." });
+    // Resolve cache paths at execution time, including builds from another cwd.
+    const run = b.addRunFile(.zig_exe);
+    run.addArgs(&.{ "build", "install", "check-negative", "-j2", "--build-file" });
+    run.addFileArg2(b.path("tests/consumer/build.zig"), .{});
+    run.addArg("--cache-dir");
+    run.addDirectoryArg2(.cache_root, .{ .make_absolute = true });
+    // The global cache follows the inherited ZIG_GLOBAL_CACHE_DIR environment.
+    // Dependency extraction must not write inside a relocated source package.
+    run.addArg("--pkg-dir");
+    run.addDirectoryArg2(.{ .relative = .{ .base = .local_cache, .sub_path = "consumer-pkg" } }, .{ .make_absolute = true });
     run.addArgs(&.{
         b.fmt("-Dtarget={s}", .{target.query.zigTriple(b.allocator) catch @panic("OOM")}),
         b.fmt("-Dcpu={s}", .{target.query.serializeCpuAlloc(b.allocator) catch @panic("OOM")}),
@@ -410,7 +485,7 @@ fn addConsumerTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
         b.fmt("-Dsdk={s}", .{sdk}),
         "--prefix",
     });
-    _ = run.addOutputDirectoryArg("consumer-install");
+    _ = run.addOutputDirectoryArg2("consumer-install", .{});
     // Let the nested Zig build track all package/SDK inputs, rather than caching
     // this command solely by its arguments and the fixture's build.zig.
     run.has_side_effects = true;
@@ -422,14 +497,15 @@ fn addConsumerTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
 fn addToolingStep(b: *std.Build, sdk: []const u8) void {
     const Entry = struct { directory: []const u8, file: []const u8, arguments: []const []const u8 };
     var entries: [sources.len]Entry = undefined;
+    const root = b.fmt("{f}", .{b.root});
     for (sources, &entries) |source, *entry| {
-        const file = b.pathFromRoot(source);
+        const file = b.pathResolve(&.{ root, source });
         entry.* = .{
-            .directory = b.pathFromRoot("."),
+            .directory = root,
             .file = file,
             .arguments = b.allocator.dupe([]const u8, &.{
-                "clang++", "-std=c++17",        "-fno-exceptions", "-fno-rtti",
-                "-I",      b.pathFromRoot("c"), "-isystem",        b.pathJoin(&.{ sdk, "public" }),
+                "clang++", "-std=c++17",                   "-fno-exceptions", "-fno-rtti",
+                "-I",      b.pathResolve(&.{ root, "c" }), "-isystem",        b.pathJoin(&.{ sdk, "public" }),
                 "-c",      file,
             }) catch @panic("OOM"),
         };
@@ -481,15 +557,15 @@ pub fn installRuntime(b: *std.Build, target: std.Target, sdk: []const u8) void {
 /// Set process-local lookup paths without changing SDK files or global settings.
 pub fn configureRun(b: *std.Build, run: *std.Build.Step.Run, target: std.Target, sdk: []const u8) void {
     const runtime = runtimeLibrary(b, target, sdk);
-    switch (target.os.tag) {
-        .macos, .linux => {
-            const key = if (target.os.tag == .macos) "DYLD_LIBRARY_PATH" else "LD_LIBRARY_PATH";
-            const previous = run.getEnvMap().get(key) orelse "";
-            // An empty trailing component would add the working directory on Linux.
-            const value = if (previous.len != 0) b.fmt("{s}:{s}", .{ runtime.directory, previous }) else runtime.directory;
-            run.setEnvironmentVariable(key, value);
-        },
-        .windows => run.addPathDir(runtime.directory),
+    const key = switch (target.os.tag) {
+        .macos => "DYLD_LIBRARY_PATH",
+        .linux => "LD_LIBRARY_PATH",
+        .windows => "PATH",
         else => unreachable,
-    }
+    };
+    const separator = if (target.os.tag == .windows) ";" else ":";
+    const previous = run.getEnvMap().get(key) orelse "";
+    // An empty trailing component would add the working directory on Linux.
+    const value = if (previous.len != 0) b.fmt("{s}{s}{s}", .{ runtime.directory, separator, previous }) else runtime.directory;
+    run.setEnvironmentVariable(key, value);
 }

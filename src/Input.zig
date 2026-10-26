@@ -5,9 +5,7 @@
 //! Valve: https://partner.steamgames.com/doc/api/ISteamInput
 const std = @import("std");
 const Context = @import("Context.zig");
-const c = @cImport({
-    @cInclude("input.h");
-});
+const c = @import("steamworkz_c");
 const native = if (@import("builtin").is_test) TestApi else c;
 const Input = @This();
 
@@ -82,7 +80,7 @@ pub const GlyphStyle = struct {
     solid_abxy: bool = false,
 
     fn bits(self: GlyphStyle) Error!u32 {
-        const base = @intFromEnum(self.base);
+        const base = @backingInt(self.base);
         if (base > 2) return error.InvalidArgument;
         return base | @as(u32, if (self.neutral_color_abxy) 0x10 else 0) | @as(u32, if (self.solid_abxy) 0x20 else 0);
     }
@@ -160,15 +158,15 @@ pub fn connectedControllers(self: Input, destination: []Controller) Error![]Cont
 /// ISteamInput::GetActionSetHandle by manifest name. Preserves .invalid on a miss;
 /// this identity owns no resource and needs no teardown.
 pub fn actionSet(self: Input, name: [:0]const u8) Error!ActionSet {
-    return @enumFromInt(try self.lookup(0, name));
+    return @fromBackingInt(@intCast(try self.lookup(0, name)));
 }
 /// ISteamInput::GetDigitalActionHandle by manifest name; .invalid is preserved.
 pub fn digitalAction(self: Input, name: [:0]const u8) Error!DigitalAction {
-    return @enumFromInt(try self.lookup(1, name));
+    return @fromBackingInt(@intCast(try self.lookup(1, name)));
 }
 /// ISteamInput::GetAnalogActionHandle by manifest name; .invalid is preserved.
 pub fn analogAction(self: Input, name: [:0]const u8) Error!AnalogAction {
-    return @enumFromInt(try self.lookup(2, name));
+    return @fromBackingInt(@intCast(try self.lookup(2, name)));
 }
 /// ISteamInput::ActivateActionSet selects actions for subsequent reads. Void
 /// forwarding does not prove the controller or action set is usable.
@@ -187,14 +185,14 @@ pub fn deactivateAllLayers(self: Input, controller: Controller) Error!void {
 pub fn currentActionSet(self: Input, controller: Controller) Error!ActionSet {
     try self.checkActive();
     var value: u64 = 0;
-    try status(native.sw_input_current_set(@intFromEnum(controller), &value));
-    return @enumFromInt(value);
+    try status(native.sw_input_current_set(@backingInt(controller), &value));
+    return @fromBackingInt(@intCast(value));
 }
 pub fn activeLayers(self: Input, controller: Controller, destination: []ActionSet) Error![]ActionSet {
     try self.checkActive();
     var values: [max_active_layers]u64 = undefined;
     var count: usize = 0;
-    try status(native.sw_input_layers(@intFromEnum(controller), &values, values.len, &count));
+    try status(native.sw_input_layers(@backingInt(controller), &values, values.len, &count));
     return publish(ActionSet, destination, &values, count);
 }
 /// ISteamInput::GetDigitalActionData after runFrame. Check active before state;
@@ -202,7 +200,7 @@ pub fn activeLayers(self: Input, controller: Controller, destination: []ActionSe
 pub fn digitalData(self: Input, controller: Controller, action: DigitalAction) Error!DigitalData {
     try self.checkActive();
     var data: c.struct_sw_input_digital = undefined;
-    try status(native.sw_input_digital_data(@intFromEnum(controller), @intFromEnum(action), &data));
+    try status(native.sw_input_digital_data(@backingInt(controller), @backingInt(action), &data));
     return .{ .state = data.state, .active = data.active };
 }
 /// ISteamInput::GetAnalogActionData after runFrame. Check active and mode before
@@ -210,29 +208,29 @@ pub fn digitalData(self: Input, controller: Controller, action: DigitalAction) E
 pub fn analogData(self: Input, controller: Controller, action: AnalogAction) Error!AnalogData {
     try self.checkActive();
     var data: c.struct_sw_input_analog = undefined;
-    try status(native.sw_input_analog_data(@intFromEnum(controller), @intFromEnum(action), &data));
-    return .{ .mode = @enumFromInt(data.mode), .x = data.x, .y = data.y, .active = data.active };
+    try status(native.sw_input_analog_data(@backingInt(controller), @backingInt(action), &data));
+    return .{ .mode = @fromBackingInt(@intCast(data.mode)), .x = data.x, .y = data.y, .active = data.active };
 }
 pub fn digitalOrigins(self: Input, controller: Controller, action_set: ActionSet, action: DigitalAction, destination: []Origin) Error![]Origin {
-    return self.origins(false, controller, action_set, @intFromEnum(action), destination);
+    return self.origins(false, controller, action_set, @backingInt(action), destination);
 }
 pub fn analogOrigins(self: Input, controller: Controller, action_set: ActionSet, action: AnalogAction, destination: []Origin) Error![]Origin {
-    return self.origins(true, controller, action_set, @intFromEnum(action), destination);
+    return self.origins(true, controller, action_set, @backingInt(action), destination);
 }
 pub fn inputType(self: Input, controller: Controller) Error!InputType {
     try self.checkActive();
     var value: i32 = 0;
-    try status(native.sw_input_type(@intFromEnum(controller), &value));
-    return @enumFromInt(value);
+    try status(native.sw_input_type(@backingInt(controller), &value));
+    return @fromBackingInt(@intCast(value));
 }
 pub fn translateOrigin(self: Input, destination_type: InputType, origin: Origin) Error!Origin {
     try self.checkActive();
     try validOrigin(origin);
-    const kind = @intFromEnum(destination_type);
+    const kind = @backingInt(destination_type);
     if (kind < 0 or kind > maximum_input_type) return error.InvalidArgument;
     var value: i32 = 0;
-    try status(native.sw_input_translate(kind, @intFromEnum(origin), &value));
-    return @enumFromInt(value);
+    try status(native.sw_input_translate(kind, @backingInt(origin), &value));
+    return @fromBackingInt(@intCast(value));
 }
 /// Text/glyph path slices borrow destination, exclude NUL, and survive later
 /// SDK calls. Null, empty and insufficient storage are distinct; no truncation.
@@ -240,41 +238,41 @@ pub fn translateOrigin(self: Input, destination_type: InputType, origin: Origin)
 pub fn glyphPNG(self: Input, origin: Origin, size: GlyphSize, style: GlyphStyle, destination: []u8) Error![]const u8 {
     try self.checkActive();
     try validOrigin(origin);
-    const n = @intFromEnum(size);
+    const n = @backingInt(size);
     if (n < 0 or n > 2) return error.InvalidArgument;
-    return text(0, 0, @intFromEnum(origin), n, try style.bits(), destination);
+    return text(0, 0, @backingInt(origin), n, try style.bits(), destination);
 }
 /// ISteamInput::GetGlyphSVGForActionOrigin; copied path borrows destination.
 /// Like glyphPNG, excludes NUL, never truncates, and does not load the image.
 pub fn glyphSVG(self: Input, origin: Origin, style: GlyphStyle, destination: []u8) Error![]const u8 {
     try self.checkActive();
     try validOrigin(origin);
-    return text(1, 0, @intFromEnum(origin), 0, try style.bits(), destination);
+    return text(1, 0, @backingInt(origin), 0, try style.bits(), destination);
 }
 /// ISteamInput::GetStringForActionOrigin; localized text copied into destination,
 /// excluding NUL. NullText and InsufficientStorage are errors, not empty names.
 pub fn originName(self: Input, origin: Origin, destination: []u8) Error![]const u8 {
     try self.checkActive();
     try validOrigin(origin);
-    return text(2, 0, @intFromEnum(origin), 0, 0, destination);
+    return text(2, 0, @backingInt(origin), 0, 0, destination);
 }
 pub fn digitalActionName(self: Input, action: DigitalAction, destination: []u8) Error![]const u8 {
     try self.checkActive();
-    return text(3, @intFromEnum(action), 0, 0, 0, destination);
+    return text(3, @backingInt(action), 0, 0, 0, destination);
 }
 pub fn analogActionName(self: Input, action: AnalogAction, destination: []u8) Error![]const u8 {
     try self.checkActive();
-    return text(4, @intFromEnum(action), 0, 0, 0, destination);
+    return text(4, @backingInt(action), 0, 0, 0, destination);
 }
 /// Raw motor values. Success means forwarding only, not hardware delivery,
 /// capability, duration, or a guaranteed zero-to-stop contract.
 pub fn vibrate(self: Input, controller: Controller, left: u16, right: u16) Error!void {
     try self.checkActive();
-    try status(native.sw_input_vibration(@intFromEnum(controller), left, right));
+    try status(native.sw_input_vibration(@backingInt(controller), left, right));
 }
 pub fn vibrateExtended(self: Input, controller: Controller, left: u16, right: u16, left_trigger: u16, right_trigger: u16) Error!void {
     try self.checkActive();
-    try status(native.sw_input_vibration_extended(@intFromEnum(controller), left, right, left_trigger, right_trigger));
+    try status(native.sw_input_vibration_extended(@backingInt(controller), left, right, left_trigger, right_trigger));
 }
 
 fn checkActive(self: Input) Error!void {
@@ -314,13 +312,13 @@ fn absoluteManifestPath(os: std.Target.Os.Tag, path: []const u8) bool {
     }
 }
 fn validOrigin(origin: Origin) Error!void {
-    const n = @intFromEnum(origin);
+    const n = @backingInt(origin);
     if (n < 0 or n > maximum_origin) return error.InvalidArgument;
 }
 fn publish(comptime T: type, destination: []T, values: anytype, count: usize) Error![]T {
     if (count > values.len) return error.MalformedCount;
     if (count > destination.len) return error.InsufficientStorage;
-    for (destination[0..count], values[0..count]) |*out, value| out.* = @enumFromInt(value);
+    for (destination[0..count], values[0..count]) |*out, value| out.* = @fromBackingInt(@intCast(value));
     return destination[0..count];
 }
 fn lookup(self: Input, kind: u32, name: [:0]const u8) Error!u64 {
@@ -332,13 +330,13 @@ fn lookup(self: Input, kind: u32, name: [:0]const u8) Error!u64 {
 }
 fn activate(self: Input, operation: u32, controller: Controller, action_set: ActionSet) Error!void {
     try self.checkActive();
-    try status(native.sw_input_activate(operation, @intFromEnum(controller), @intFromEnum(action_set)));
+    try status(native.sw_input_activate(operation, @backingInt(controller), @backingInt(action_set)));
 }
 fn origins(self: Input, analog: bool, controller: Controller, action_set: ActionSet, action: u64, destination: []Origin) Error![]Origin {
     try self.checkActive();
     var values: [max_origins]i32 = undefined;
     var count: usize = 0;
-    try status(native.sw_input_origins(analog, @intFromEnum(controller), @intFromEnum(action_set), action, &values, values.len, &count));
+    try status(native.sw_input_origins(analog, @backingInt(controller), @backingInt(action_set), action, &values, values.len, &count));
     return publish(Origin, destination, &values, count);
 }
 fn text(kind: u32, action: u64, origin: i32, size: i32, style: u32, destination: []u8) Error![]const u8 {
@@ -561,22 +559,22 @@ test "Input enumerations publish zero exact short and malformed counts atomicall
     inline for (.{ false, true }) |is_analog| {
         origins_out = @splat(.none);
         if (is_analog) {
-            try std.testing.expectError(error.InsufficientStorage, input.analogOrigins(.all, @enumFromInt(7), @enumFromInt(8), origins_out[0 .. max_origins - 1]));
+            try std.testing.expectError(error.InsufficientStorage, input.analogOrigins(.all, @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(8)), origins_out[0 .. max_origins - 1]));
             try std.testing.expectEqual(Origin.none, origins_out[0]);
-            _ = try input.analogOrigins(.all, @enumFromInt(7), @enumFromInt(8), &origins_out);
+            _ = try input.analogOrigins(.all, @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(8)), &origins_out);
         } else {
-            try std.testing.expectError(error.InsufficientStorage, input.digitalOrigins(.all, @enumFromInt(7), @enumFromInt(8), origins_out[0 .. max_origins - 1]));
+            try std.testing.expectError(error.InsufficientStorage, input.digitalOrigins(.all, @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(8)), origins_out[0 .. max_origins - 1]));
             try std.testing.expectEqual(Origin.none, origins_out[0]);
-            _ = try input.digitalOrigins(.all, @enumFromInt(7), @enumFromInt(8), &origins_out);
+            _ = try input.digitalOrigins(.all, @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(8)), &origins_out);
         }
         try std.testing.expectEqual(@as(u64, @intFromBool(is_analog)), TestApi.last[0]);
         try std.testing.expectEqual(@as(u64, 7), TestApi.last[2]);
         try std.testing.expectEqual(@as(u64, 8), TestApi.last[3]);
-        for (origins_out, 0..) |v, i| try std.testing.expectEqual(@as(i32, @intCast(1000 + i)), @intFromEnum(v));
+        for (origins_out, 0..) |v, i| try std.testing.expectEqual(@as(i32, @intCast(1000 + i)), @backingInt(v));
     }
     for (controllers, layers, 0..) |h, l, i| {
-        try std.testing.expectEqual(@as(u64, 1000 + i), @intFromEnum(h));
-        try std.testing.expectEqual(@as(u64, 1000 + i), @intFromEnum(l));
+        try std.testing.expectEqual(@as(u64, 1000 + i), @backingInt(h));
+        try std.testing.expectEqual(@as(u64, 1000 + i), @backingInt(l));
     }
     controllers = @splat(.invalid);
     layers = @splat(.invalid);
@@ -608,18 +606,18 @@ test "Input distinct handles action forwarding and raw state conversion" {
     try std.testing.expectEqual(@as(u64, 1), TestApi.last[0]);
     const analog = try input.analogAction("action");
     try std.testing.expectEqual(@as(u64, 2), TestApi.last[0]);
-    try std.testing.expectEqual(std.math.maxInt(u64) - 1, @intFromEnum(set));
-    try std.testing.expectEqual(@intFromEnum(set), @intFromEnum(digital));
-    try std.testing.expectEqual(@intFromEnum(set), @intFromEnum(analog));
+    try std.testing.expectEqual(std.math.maxInt(u64) - 1, @backingInt(set));
+    try std.testing.expectEqual(@backingInt(set), @backingInt(digital));
+    try std.testing.expectEqual(@backingInt(set), @backingInt(analog));
     try input.activateActionSet(.all, set);
-    try std.testing.expectEqualSlices(u64, &.{ 0, std.math.maxInt(u64), @intFromEnum(set) }, TestApi.last[0..3]);
+    try std.testing.expectEqualSlices(u64, &.{ 0, std.math.maxInt(u64), @backingInt(set) }, TestApi.last[0..3]);
     try input.activateLayer(.all, set);
     try std.testing.expectEqual(@as(u64, 1), TestApi.last[0]);
     try input.deactivateLayer(.all, set);
     try std.testing.expectEqual(@as(u64, 2), TestApi.last[0]);
     try input.deactivateAllLayers(.all);
     try std.testing.expectEqualSlices(u64, &.{ 3, std.math.maxInt(u64), 0 }, TestApi.last[0..3]);
-    try std.testing.expectEqual(@as(u64, 23), @intFromEnum(try input.currentActionSet(.all)));
+    try std.testing.expectEqual(@as(u64, 23), @backingInt(try input.currentActionSet(.all)));
     for ([_]bool{ false, true }) |active| for ([_]bool{ false, true }) |state| {
         TestApi.digital = .{ .state = state, .active = active };
         try std.testing.expectEqual(DigitalData{ .state = state, .active = active }, try input.digitalData(.all, digital));
@@ -627,13 +625,13 @@ test "Input distinct handles action forwarding and raw state conversion" {
     for ([_]u32{ 0x80000000, 0x7fc12345, 0x7f800000, 0xc49a5000 }) |bits| {
         TestApi.analog = .{ .mode = 31, .x = @bitCast(bits), .y = @bitCast(bits ^ 0x80000000), .active = false };
         const data = try input.analogData(.all, analog);
-        try std.testing.expectEqual(@as(i32, 31), @intFromEnum(data.mode));
+        try std.testing.expectEqual(@as(i32, 31), @backingInt(data.mode));
         try std.testing.expectEqual(bits, @as(u32, @bitCast(data.x)));
         try std.testing.expectEqual(bits ^ 0x80000000, @as(u32, @bitCast(data.y)));
         try std.testing.expect(!data.active);
     }
-    try std.testing.expectEqual(@as(i32, 254), @intFromEnum(try input.inputType(.all)));
-    try std.testing.expectEqual(@as(i32, 32000), @intFromEnum(try input.translateOrigin(@enumFromInt(254), @enumFromInt(32767))));
+    try std.testing.expectEqual(@as(i32, 254), @backingInt(try input.inputType(.all)));
+    try std.testing.expectEqual(@as(i32, 32000), @backingInt(try input.translateOrigin(@fromBackingInt(@intCast(254)), @fromBackingInt(@intCast(32767)))));
     try std.testing.expectEqualSlices(u64, &.{ 254, 32767 }, TestApi.last[0..2]);
     try input.vibrate(.all, 0, 65535);
     try std.testing.expectEqualSlices(u64, &.{ std.math.maxInt(u64), 0, 65535 }, TestApi.last[0..3]);
@@ -658,19 +656,19 @@ test "Input glyph styles text ownership and local input validation" {
     try std.testing.expect(!try input.setManifestPath(path));
     for ([_]GlyphStyle.Base{ .knockout, .light, .dark }) |base| for ([_]bool{ false, true }) |neutral| for ([_]bool{ false, true }) |solid| {
         const style: GlyphStyle = .{ .base = base, .neutral_color_abxy = neutral, .solid_abxy = solid };
-        const copied = try input.glyphPNG(@enumFromInt(32767), .large, style, &buffer);
+        const copied = try input.glyphPNG(@fromBackingInt(@intCast(32767)), .large, style, &buffer);
         try std.testing.expectEqualStrings("glyph/path", copied);
         try std.testing.expectEqual(@as(u64, try style.bits()), TestApi.last[4]);
         try std.testing.expectEqual(@as(u64, 2), TestApi.last[3]);
-        _ = try input.glyphSVG(@enumFromInt(32767), style, &buffer);
+        _ = try input.glyphSVG(@fromBackingInt(@intCast(32767)), style, &buffer);
         try std.testing.expectEqual(@as(u64, 1), TestApi.last[0]);
     };
     const copied = try input.originName(.none, &buffer);
     TestApi.returned_text = "changed";
     try std.testing.expectEqualStrings("glyph/path", copied);
-    _ = try input.digitalActionName(@enumFromInt(71), &buffer);
+    _ = try input.digitalActionName(@fromBackingInt(@intCast(71)), &buffer);
     try std.testing.expectEqualSlices(u64, &.{ 3, 71 }, TestApi.last[0..2]);
-    _ = try input.analogActionName(@enumFromInt(72), &buffer);
+    _ = try input.analogActionName(@fromBackingInt(@intCast(72)), &buffer);
     try std.testing.expectEqualSlices(u64, &.{ 4, 72 }, TestApi.last[0..2]);
     buffer = @splat(0xaa);
     try std.testing.expectError(error.InsufficientStorage, input.originName(.none, buffer[0..1]));
@@ -683,11 +681,11 @@ test "Input glyph styles text ownership and local input validation" {
     try std.testing.expectError(error.InvalidArgument, input.setManifestPath("relative"));
     try std.testing.expectError(error.InvalidArgument, input.setManifestPath("/a\x00b"));
     try std.testing.expectError(error.InvalidArgument, input.actionSet("a\x00b"));
-    try std.testing.expectError(error.InvalidArgument, input.translateOrigin(@enumFromInt(256), .none));
-    try std.testing.expectError(error.InvalidArgument, input.translateOrigin(.unknown, @enumFromInt(-1)));
-    try std.testing.expectError(error.InvalidArgument, input.originName(@enumFromInt(32768), &buffer));
-    try std.testing.expectError(error.InvalidArgument, input.glyphPNG(.none, @enumFromInt(3), .{}, &buffer));
-    try std.testing.expectError(error.InvalidArgument, input.glyphSVG(.none, .{ .base = @enumFromInt(3) }, &buffer));
+    try std.testing.expectError(error.InvalidArgument, input.translateOrigin(@fromBackingInt(@intCast(256)), .none));
+    try std.testing.expectError(error.InvalidArgument, input.translateOrigin(.unknown, @fromBackingInt(@intCast(-1))));
+    try std.testing.expectError(error.InvalidArgument, input.originName(@fromBackingInt(@intCast(32768)), &buffer));
+    try std.testing.expectError(error.InvalidArgument, input.glyphPNG(.none, @fromBackingInt(@intCast(3)), .{}, &buffer));
+    try std.testing.expectError(error.InvalidArgument, input.glyphSVG(.none, .{ .base = @fromBackingInt(@intCast(3)) }, &buffer));
     try std.testing.expectEqual(before, TestApi.calls);
 }
 
@@ -724,10 +722,10 @@ test "Input inactive and failed sessions reject every operation before validatio
         try std.testing.expectError(expected, input.digitalOrigins(.all, .invalid, .invalid, &origins_out));
         try std.testing.expectError(expected, input.analogOrigins(.all, .invalid, .invalid, &origins_out));
         try std.testing.expectError(expected, input.inputType(.all));
-        try std.testing.expectError(expected, input.translateOrigin(@enumFromInt(-1), .none));
-        try std.testing.expectError(expected, input.glyphPNG(.none, @enumFromInt(-1), .{}, &buffer));
-        try std.testing.expectError(expected, input.glyphSVG(@enumFromInt(-1), .{}, &buffer));
-        try std.testing.expectError(expected, input.originName(@enumFromInt(-1), &buffer));
+        try std.testing.expectError(expected, input.translateOrigin(@fromBackingInt(@intCast(-1)), .none));
+        try std.testing.expectError(expected, input.glyphPNG(.none, @fromBackingInt(@intCast(-1)), .{}, &buffer));
+        try std.testing.expectError(expected, input.glyphSVG(@fromBackingInt(@intCast(-1)), .{}, &buffer));
+        try std.testing.expectError(expected, input.originName(@fromBackingInt(@intCast(-1)), &buffer));
         try std.testing.expectError(expected, input.digitalActionName(.invalid, &buffer));
         try std.testing.expectError(expected, input.analogActionName(.invalid, &buffer));
         try std.testing.expectError(expected, input.vibrate(.all, 0, 0));

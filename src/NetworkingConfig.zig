@@ -6,9 +6,7 @@
 const std = @import("std");
 const Context = @import("Context.zig");
 const Networking = @import("Networking.zig");
-const c = @cImport({
-    @cInclude("networking_config.h");
-});
+const c = @import("steamworkz_c");
 const NetworkingConfig = @This();
 
 lease: Context.Lease,
@@ -116,14 +114,14 @@ const NativeScope = struct { kind: u32, handle: u32 };
 fn nativeScope(scope: Scope) Error!NativeScope {
     const result: NativeScope = switch (scope) {
         .global => .{ .kind = 0, .handle = 0 },
-        .listen_socket => |h| .{ .kind = 1, .handle = @intFromEnum(h) },
-        .connection => |h| .{ .kind = 2, .handle = @intFromEnum(h) },
+        .listen_socket => |h| .{ .kind = 1, .handle = @backingInt(h) },
+        .connection => |h| .{ .kind = 2, .handle = @backingInt(h) },
     };
     _ = std.math.cast(isize, result.handle) orelse return error.InvalidScope;
     return result;
 }
 fn nativeOption(option: Int32Option) Error!u32 {
-    const value = @intFromEnum(option);
+    const value = @backingInt(option);
     if (value >= 6) return error.InvalidOption;
     return value;
 }
@@ -150,9 +148,9 @@ fn getWith(comptime api: type, scope: Scope, option: Int32Option) Error!GetResul
     return decodeGet(out);
 }
 fn decodeGet(out: c.sw_config_get_result) GetResult {
-    const status: GetStatus = @enumFromInt(out.status);
+    const status: GetStatus = @fromBackingInt(@intCast(out.status));
     const outcome: GetOutcome = switch (status) {
-        .ok, .ok_inherited => if (out.data_type != @intFromEnum(DataType.int32) or out.size != @sizeOf(i32))
+        .ok, .ok_inherited => if (out.data_type != @backingInt(DataType.int32) or out.size != @sizeOf(i32))
             .malformed_success
         else if (status == .ok)
             .{ .value = out.value }
@@ -163,7 +161,7 @@ fn decodeGet(out: c.sw_config_get_result) GetResult {
         .buffer_too_small => .buffer_too_small,
         _ => .unknown_status,
     };
-    return .{ .status = status, .data_type = @enumFromInt(out.data_type), .size = out.size, .outcome = outcome };
+    return .{ .status = status, .data_type = @fromBackingInt(@intCast(out.data_type)), .size = out.size, .outcome = outcome };
 }
 fn marshalSimulation(s: Simulation) Error!c.sw_config_simulation {
     for ([_]f32{ s.send_loss_percent, s.receive_loss_percent, s.send_reorder_percent, s.receive_reorder_percent }) |percent| {
@@ -182,8 +180,8 @@ fn marshalSimulation(s: Simulation) Error!c.sw_config_simulation {
 }
 fn decodeSimulation(out: c.sw_config_simulation_result) SimulationResult {
     var result: SimulationResult = undefined;
-    inline for (std.meta.fields(SimulationResult), 0..) |field, i| {
-        @field(result, field.name) = switch (out.fields[i]) {
+    inline for (@typeInfo(SimulationResult).@"struct".field_names, 0..) |field_name, i| {
+        @field(result, field_name) = switch (out.fields[i]) {
             0 => .not_attempted,
             1 => .applied,
             2 => .rejected,
@@ -252,25 +250,25 @@ const Fake = struct {
 test "NetworkingConfig scalar scope option routing and native rejection" {
     Fake.local_result = 0;
     Fake.accepted = true;
-    const scopes = [_]Scope{ .global, .{ .listen_socket = @enumFromInt(0xffffffff) }, .{ .connection = .invalid } };
+    const scopes = [_]Scope{ .global, .{ .listen_socket = @fromBackingInt(@intCast(0xffffffff)) }, .{ .connection = .invalid } };
     for (scopes, 0..) |scope, index| for (0..6) |key| {
         for ([_]i32{ std.math.minInt(i32), -1, 0, std.math.maxInt(i32) }) |value| {
-            try setWith(Fake, scope, @enumFromInt(key), value, false);
+            try setWith(Fake, scope, @fromBackingInt(@intCast(key)), value, false);
             try std.testing.expectEqual(index, Fake.scope);
             try std.testing.expectEqual(@as(u32, if (index == 1) 0xffffffff else 0), Fake.handle);
             try std.testing.expectEqual(key, Fake.option);
             try std.testing.expectEqual(value, Fake.value);
             try std.testing.expect(!Fake.cleared);
-            try setWith(Fake, scope, @enumFromInt(key), value, true);
+            try setWith(Fake, scope, @fromBackingInt(@intCast(key)), value, true);
             try std.testing.expect(Fake.cleared);
-            _ = try getWith(Fake, scope, @enumFromInt(key));
+            _ = try getWith(Fake, scope, @fromBackingInt(@intCast(key)));
             try std.testing.expectEqual(index, Fake.scope);
             try std.testing.expectEqual(key, Fake.option);
         }
     };
     Fake.calls = 0;
-    try std.testing.expectError(error.InvalidOption, setWith(Fake, .global, @enumFromInt(6), 0, false));
-    try std.testing.expectError(error.InvalidOption, getWith(Fake, .global, @enumFromInt(0xffffffff)));
+    try std.testing.expectError(error.InvalidOption, setWith(Fake, .global, @fromBackingInt(@intCast(6)), 0, false));
+    try std.testing.expectError(error.InvalidOption, getWith(Fake, .global, @fromBackingInt(@intCast(0xffffffff))));
     try std.testing.expectEqual(0, Fake.calls);
     Fake.accepted = false;
     try std.testing.expectError(error.OperationFailed, setWith(Fake, .global, .initial_timeout_ms, 0, false));
@@ -287,8 +285,8 @@ test "NetworkingConfig getter statuses types sizes and inheritance are distinct"
             for ([_]usize{ 0, 3, 4, 8, std.math.maxInt(usize) }) |size| {
                 Fake.get_result = .{ .status = status, .data_type = data_type, .size = size, .value = -987654 };
                 const result = try getWith(Fake, .global, .nagle_delay_us);
-                try std.testing.expectEqual(status, @intFromEnum(result.status));
-                try std.testing.expectEqual(data_type, @intFromEnum(result.data_type));
+                try std.testing.expectEqual(status, @backingInt(result.status));
+                try std.testing.expectEqual(data_type, @backingInt(result.data_type));
                 try std.testing.expectEqual(size, result.size);
                 const expected: std.meta.Tag(GetOutcome) = switch (status) {
                     -3 => .buffer_too_small,
@@ -309,11 +307,11 @@ test "NetworkingConfig getter statuses types sizes and inheritance are distinct"
 
 test "NetworkingConfig simulation validates all fields before native access" {
     Fake.local_result = 0;
-    inline for (std.meta.fields(Simulation)) |field| {
-        const bad_values = if (field.type == f32) [_]f32{ -1, 101, std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32) } else [_]i32{-1};
+    inline for (@typeInfo(Simulation).@"struct".field_names) |field_name| {
+        const bad_values = if (@FieldType(Simulation, field_name) == f32) [_]f32{ -1, 101, std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32) } else [_]i32{-1};
         for (bad_values) |value| {
             var settings: Simulation = .{};
-            @field(settings, field.name) = value;
+            @field(settings, field_name) = value;
             Fake.calls = 0;
             try std.testing.expectError(error.InvalidSimulation, applyWith(Fake, settings));
             try std.testing.expectEqual(0, Fake.calls);
@@ -321,7 +319,7 @@ test "NetworkingConfig simulation validates all fields before native access" {
     }
     const settings: Simulation = .{ .send_loss_percent = 0, .receive_loss_percent = 100, .send_lag_ms = 123, .receive_lag_ms = 456, .send_reorder_percent = 12.5, .receive_reorder_percent = 98.75, .reorder_delay_ms = std.math.maxInt(i32) };
     _ = try applyWith(Fake, settings);
-    inline for (std.meta.fields(Simulation)) |field| try std.testing.expectEqual(@field(settings, field.name), @field(Fake.simulation, field.name));
+    inline for (@typeInfo(Simulation).@"struct".field_names) |field_name| try std.testing.expectEqual(@field(settings, field_name), @field(Fake.simulation, field_name));
     Fake.local_result = -1;
     try std.testing.expectError(error.InterfaceUnavailable, applyWith(Fake, .{}));
     try std.testing.expectError(error.InterfaceUnavailable, resetWith(Fake));
@@ -332,15 +330,15 @@ test "NetworkingConfig simulation preserves every partial and reset outcome" {
     for (0..8) |reject| {
         for (0..7) |i| Fake.outcomes.fields[i] = if (reject == 0 or i + 1 < reject) 1 else if (i + 1 == reject) 2 else 0;
         const result = try applyWith(Fake, .{});
-        inline for (std.meta.fields(SimulationResult), 0..) |field, i| {
+        inline for (@typeInfo(SimulationResult).@"struct".field_names, 0..) |field_name, i| {
             const expected: FieldOutcome = if (reject == 0 or i + 1 < reject) .applied else if (i + 1 == reject) .rejected else .not_attempted;
-            try std.testing.expectEqual(expected, @field(result, field.name));
+            try std.testing.expectEqual(expected, @field(result, field_name));
         }
         try std.testing.expect(!Fake.cleared);
-        inline for (std.meta.fields(Simulation)) |field| try std.testing.expectEqual(@as(field.type, 0), @field(Fake.simulation, field.name));
+        inline for (@typeInfo(Simulation).@"struct".field_names) |field_name| try std.testing.expectEqual(@as(@FieldType(Simulation, field_name), 0), @field(Fake.simulation, field_name));
         for (0..7) |i| Fake.outcomes.fields[i] = if (i + 1 == reject) 2 else 1;
         const reset = try resetWith(Fake);
         try std.testing.expect(Fake.cleared);
-        inline for (std.meta.fields(SimulationResult), 0..) |field, i| try std.testing.expectEqual(if (i + 1 == reject) FieldOutcome.rejected else FieldOutcome.applied, @field(reset, field.name));
+        inline for (@typeInfo(SimulationResult).@"struct".field_names, 0..) |field_name, i| try std.testing.expectEqual(if (i + 1 == reject) FieldOutcome.rejected else FieldOutcome.applied, @field(reset, field_name));
     }
 }

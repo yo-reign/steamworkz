@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init) !void {
     const name = try client.friends().personaNameCopy(&name_buffer);
     const app = client.appId(); // Another Steam call cannot invalidate the copy.
     // A game can display `name`; this example does not log personal information.
-    std.debug.print("App {d}: copied {d} persona-name bytes\n", .{ @intFromEnum(app), name.len });
+    std.debug.print("App {d}: copied {d} persona-name bytes\n", .{ @backingInt(app), name.len });
 
     // A short headless demonstration. In a game, use its existing render loop,
     // including menus/paused simulation; Steamworkz creates no update thread.

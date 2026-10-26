@@ -10,9 +10,7 @@ const std = @import("std");
 const Context = @import("Context.zig");
 const types = @import("types.zig");
 const Request = @import("requests.zig").Request;
-const c = @cImport({
-    @cInclude("lobbies.h");
-});
+const c = @import("steamworkz_c");
 const Lobbies = @This();
 
 lease: Context.Lease,
@@ -103,7 +101,7 @@ pub fn create(self: Lobbies, options: CreateOptions) Error!Request(.lobby_create
     try validateType(options.visibility);
     try validateLimit(options.member_limit);
     self.lease.check();
-    return Request(.lobby_created).init(@enumFromInt(c.sw_lobbies_create(@intFromEnum(options.visibility), @intCast(options.member_limit))));
+    return Request(.lobby_created).init(@fromBackingInt(@intCast(c.sw_lobbies_create(@backingInt(options.visibility), @intCast(options.member_limit)))));
 }
 
 /// ISteamMatchmaking::JoinLobby. The returned Request means accepted, not joined.
@@ -113,7 +111,7 @@ pub fn create(self: Lobbies, options: CreateOptions) Error!Request(.lobby_create
 pub fn join(self: Lobbies, lobby: SteamId) Error!Request(.lobby_entered) {
     try validateId(lobby);
     self.lease.check();
-    return Request(.lobby_entered).init(@enumFromInt(c.sw_lobbies_join(@intFromEnum(lobby))));
+    return Request(.lobby_entered).init(@fromBackingInt(@intCast(c.sw_lobbies_join(@backingInt(lobby)))));
 }
 
 /// ISteamMatchmaking::LeaveLobby ends local membership. SDK void operation:
@@ -121,7 +119,7 @@ pub fn join(self: Lobbies, lobby: SteamId) Error!Request(.lobby_entered) {
 pub fn leave(self: Lobbies, lobby: SteamId) Error!void {
     try validateId(lobby);
     self.lease.check();
-    try succeeded(c.sw_lobbies_leave(@intFromEnum(lobby)));
+    try succeeded(c.sw_lobbies_leave(@backingInt(lobby)));
 }
 
 /// ISteamMatchmaking::RequestLobbyList after AddRequestLobbyList* filters.
@@ -138,7 +136,7 @@ pub fn requestList(self: Lobbies, allocator: std.mem.Allocator, filters: []const
     defer allocator.free(native);
     try marshalFilters(filters, native);
     self.lease.check();
-    return Request(.lobby_list).init(@enumFromInt(c.sw_lobbies_request_list(native.ptr, native.len)));
+    return Request(.lobby_list).init(@fromBackingInt(@intCast(c.sw_lobbies_request_list(native.ptr, native.len))));
 }
 
 /// ISteamMatchmaking::GetLobbyByIndex. matching_count comes from LobbyMatchList_t of
@@ -155,7 +153,7 @@ pub fn lobbyAt(self: Lobbies, index: usize, matching_count: u32) Error!SteamId {
 pub fn memberCount(self: Lobbies, lobby: SteamId) Error!u32 {
     try validateId(lobby);
     self.lease.check();
-    return nativeCount(c.sw_lobbies_member_count(@intFromEnum(lobby)));
+    return nativeCount(c.sw_lobbies_member_count(@backingInt(lobby)));
 }
 
 /// ISteamMatchmaking::GetLobbyMemberByIndex with a zero-based index checked
@@ -163,14 +161,14 @@ pub fn memberCount(self: Lobbies, lobby: SteamId) Error!u32 {
 pub fn memberAt(self: Lobbies, lobby: SteamId, index: usize) Error!SteamId {
     const native_index = try checkedIndex(index, try self.memberCount(lobby));
     self.lease.check();
-    return steamId(c.sw_lobbies_member_at(@intFromEnum(lobby), native_index));
+    return steamId(c.sw_lobbies_member_at(@backingInt(lobby), native_index));
 }
 
 /// ISteamMatchmaking::GetLobbyOwner requires membership; returns a user ID.
 pub fn owner(self: Lobbies, lobby: SteamId) Error!SteamId {
     try validateId(lobby);
     self.lease.check();
-    return steamId(c.sw_lobbies_owner(@intFromEnum(lobby)));
+    return steamId(c.sw_lobbies_owner(@backingInt(lobby)));
 }
 
 /// Requires local ownership and a new owner who is already a member.
@@ -178,7 +176,7 @@ pub fn setOwner(self: Lobbies, lobby: SteamId, new_owner: SteamId) Error!void {
     try validateId(lobby);
     try validateId(new_owner);
     self.lease.check();
-    try succeeded(c.sw_lobbies_set_owner(@intFromEnum(lobby), @intFromEnum(new_owner)));
+    try succeeded(c.sw_lobbies_set_owner(@backingInt(lobby), @backingInt(new_owner)));
 }
 
 /// ISteamMatchmaking::GetLobbyData. Borrowed SDK text: copy before another Steam
@@ -190,7 +188,7 @@ pub fn data(self: Lobbies, lobby: SteamId, key: [:0]const u8) Error![]const u8 {
     try validateId(lobby);
     try validateKey(key);
     self.lease.check();
-    return borrowedText(c.sw_lobbies_data(@intFromEnum(lobby), key.ptr));
+    return borrowedText(c.sw_lobbies_data(@backingInt(lobby), key.ptr));
 }
 
 /// Copies the full value into caller storage. Empty retains data()'s ambiguity.
@@ -211,7 +209,7 @@ pub fn memberData(self: Lobbies, lobby: SteamId, member: SteamId, key: [:0]const
     try validateId(member);
     try validateKey(key);
     self.lease.check();
-    return borrowedText(c.sw_lobbies_member_data(@intFromEnum(lobby), @intFromEnum(member), key.ptr));
+    return borrowedText(c.sw_lobbies_member_data(@backingInt(lobby), @backingInt(member), key.ptr));
 }
 
 /// Copies the full value into caller storage without a terminator or truncation.
@@ -230,7 +228,7 @@ pub fn setData(self: Lobbies, lobby: SteamId, key: [:0]const u8, value: [:0]cons
     try validateKey(key);
     try validateValue(value);
     self.lease.check();
-    try succeeded(c.sw_lobbies_set_data(@intFromEnum(lobby), key.ptr, value.ptr));
+    try succeeded(c.sw_lobbies_set_data(@backingInt(lobby), key.ptr, value.ptr));
 }
 
 /// Sets only the local member's metadata. SDK void operation: submission only.
@@ -239,7 +237,7 @@ pub fn setMemberData(self: Lobbies, lobby: SteamId, key: [:0]const u8, value: [:
     try validateKey(key);
     try validateValue(value);
     self.lease.check();
-    try succeeded(c.sw_lobbies_set_member_data(@intFromEnum(lobby), key.ptr, value.ptr));
+    try succeeded(c.sw_lobbies_set_member_data(@backingInt(lobby), key.ptr, value.ptr));
 }
 
 /// Native false is a failure, not evidence that the key was missing.
@@ -247,14 +245,14 @@ pub fn deleteData(self: Lobbies, lobby: SteamId, key: [:0]const u8) Error!void {
     try validateId(lobby);
     try validateKey(key);
     self.lease.check();
-    try succeeded(c.sw_lobbies_delete_data(@intFromEnum(lobby), key.ptr));
+    try succeeded(c.sw_lobbies_delete_data(@backingInt(lobby), key.ptr));
 }
 
 /// Cached key count; zero also occurs for unavailable/invalid lobby data.
 pub fn dataCount(self: Lobbies, lobby: SteamId) Error!u32 {
     try validateId(lobby);
     self.lease.check();
-    return nativeCount(c.sw_lobbies_data_count(@intFromEnum(lobby)));
+    return nativeCount(c.sw_lobbies_data_count(@backingInt(lobby)));
 }
 
 pub const MetadataBuffers = struct {
@@ -270,7 +268,7 @@ pub fn dataAt(self: Lobbies, lobby: SteamId, index: usize, buffers: *MetadataBuf
     @memset(&buffers.key, 0xff);
     @memset(&buffers.value, 0xff);
     self.lease.check();
-    try succeeded(c.sw_lobbies_data_at(@intFromEnum(lobby), native_index, &buffers.key, buffers.key.len, &buffers.value, buffers.value.len));
+    try succeeded(c.sw_lobbies_data_at(@backingInt(lobby), native_index, &buffers.key, buffers.key.len, &buffers.value, buffers.value.len));
     return .{ .key = try terminatedText(&buffers.key), .value = try terminatedText(&buffers.value) };
 }
 
@@ -280,7 +278,7 @@ pub fn dataAt(self: Lobbies, lobby: SteamId, index: usize, buffers: *MetadataBuf
 pub fn requestData(self: Lobbies, lobby: SteamId) Error!void {
     try validateId(lobby);
     self.lease.check();
-    try succeeded(c.sw_lobbies_request_data(@intFromEnum(lobby)));
+    try succeeded(c.sw_lobbies_request_data(@backingInt(lobby)));
 }
 
 /// Success means sent, not accepted by the invitee.
@@ -288,14 +286,14 @@ pub fn invite(self: Lobbies, lobby: SteamId, invitee: SteamId) Error!void {
     try validateId(lobby);
     try validateId(invitee);
     self.lease.check();
-    try succeeded(c.sw_lobbies_invite(@intFromEnum(lobby), @intFromEnum(invitee)));
+    try succeeded(c.sw_lobbies_invite(@backingInt(lobby), @backingInt(invitee)));
 }
 
 /// ISteamMatchmaking::SetLobbyJoinable; owner-only. False blocks even invitees.
 pub fn setJoinable(self: Lobbies, lobby: SteamId, joinable: bool) Error!void {
     try validateId(lobby);
     self.lease.check();
-    try succeeded(c.sw_lobbies_set_joinable(@intFromEnum(lobby), @intFromBool(joinable)));
+    try succeeded(c.sw_lobbies_set_joinable(@backingInt(lobby), @intFromBool(joinable)));
 }
 
 /// ISteamMatchmaking::SetLobbyType; owner-only visibility change.
@@ -303,7 +301,7 @@ pub fn setType(self: Lobbies, lobby: SteamId, lobby_type: LobbyType) Error!void 
     try validateId(lobby);
     try validateType(lobby_type);
     self.lease.check();
-    try succeeded(c.sw_lobbies_set_type(@intFromEnum(lobby), @intFromEnum(lobby_type)));
+    try succeeded(c.sw_lobbies_set_type(@backingInt(lobby), @backingInt(lobby_type)));
 }
 
 /// ISteamMatchmaking::SetLobbyMemberLimit; owner-only, 1..250 members.
@@ -311,14 +309,14 @@ pub fn setMemberLimit(self: Lobbies, lobby: SteamId, member_limit: u32) Error!vo
     try validateId(lobby);
     try validateLimit(member_limit);
     self.lease.check();
-    try succeeded(c.sw_lobbies_set_limit(@intFromEnum(lobby), @intCast(member_limit)));
+    try succeeded(c.sw_lobbies_set_limit(@backingInt(lobby), @intCast(member_limit)));
 }
 
 /// Native zero means no defined limit (and does not establish lobby validity).
 pub fn memberLimit(self: Lobbies, lobby: SteamId) Error!u32 {
     try validateId(lobby);
     self.lease.check();
-    return nativeCount(c.sw_lobbies_limit(@intFromEnum(lobby)));
+    return nativeCount(c.sw_lobbies_limit(@backingInt(lobby)));
 }
 
 /// ISteamMatchmaking::SendLobbyChatMsg broadcasts 1..4096 bytes to members,
@@ -330,7 +328,7 @@ pub fn sendChat(self: Lobbies, lobby: SteamId, bytes: []const u8) Error!void {
     try validateId(lobby);
     try validateChatSize(bytes.len);
     self.lease.check();
-    try succeeded(c.sw_lobbies_send_chat(@intFromEnum(lobby), bytes.ptr, @intCast(bytes.len)));
+    try succeeded(c.sw_lobbies_send_chat(@backingInt(lobby), bytes.ptr, @intCast(bytes.len)));
 }
 
 pub const Chat = struct { sender: SteamId, entry_type: ChatEntryType, bytes: []const u8 };
@@ -345,9 +343,9 @@ pub fn readChat(self: Lobbies, lobby: SteamId, chat_id: u32, buffer: []u8) Error
     if (buffer.len < max_chat_bytes) return error.BufferTooSmall;
     var out: c.SwLobbyChat = undefined;
     self.lease.check();
-    try succeeded(c.sw_lobbies_read_chat(@intFromEnum(lobby), native_id, buffer.ptr, max_chat_bytes, &out));
+    try succeeded(c.sw_lobbies_read_chat(@backingInt(lobby), native_id, buffer.ptr, max_chat_bytes, &out));
     const size = try chatSize(out.size, max_chat_bytes);
-    return .{ .sender = try steamId(out.sender), .entry_type = @enumFromInt(out.entry_type), .bytes = buffer[0..size] };
+    return .{ .sender = try steamId(out.sender), .entry_type = @fromBackingInt(@intCast(out.entry_type)), .bytes = buffer[0..size] };
 }
 
 pub const GameServer = struct {
@@ -363,7 +361,7 @@ pub fn setGameServer(self: Lobbies, lobby: SteamId, server: GameServer) Error!vo
     try validateId(lobby);
     const native = try marshalServer(server);
     self.lease.check();
-    try succeeded(c.sw_lobbies_set_game_server(@intFromEnum(lobby), &native));
+    try succeeded(c.sw_lobbies_set_game_server(@backingInt(lobby), &native));
 }
 
 /// null means the SDK reported no association OR an invalid/uncached lobby.
@@ -371,10 +369,10 @@ pub fn gameServer(self: Lobbies, lobby: SteamId) Error!?GameServer {
     try validateId(lobby);
     var out: c.SwLobbyGameServer = undefined;
     self.lease.check();
-    const result = c.sw_lobbies_game_server(@intFromEnum(lobby), &out);
+    const result = c.sw_lobbies_game_server(@backingInt(lobby), &out);
     if (result < 0) return error.OperationFailed;
     if (result == 0) return null;
-    return .{ .steam_id = @enumFromInt(out.steam_id), .ipv4 = out.ipv4, .port = out.port };
+    return .{ .steam_id = @fromBackingInt(@intCast(out.steam_id)), .ipv4 = out.ipv4, .port = out.port };
 }
 
 fn validateId(id: SteamId) Error!void {
@@ -382,7 +380,7 @@ fn validateId(id: SteamId) Error!void {
 }
 fn steamId(id: u64) Error!SteamId {
     if (id == 0) return error.OperationFailed;
-    return @enumFromInt(id);
+    return @fromBackingInt(@intCast(id));
 }
 fn succeeded(result: c_int) Error!void {
     if (result == 0) return error.OperationFailed;
@@ -416,7 +414,7 @@ fn validateValue(value: [:0]const u8) Error!void {
     try validateText(value, metadata_value_capacity - 1);
 }
 fn validateComparison(value: Comparison) Error!void {
-    if (@intFromEnum(value) < -2 or @intFromEnum(value) > 3) return error.InvalidEnum;
+    if (@backingInt(value) < -2 or @backingInt(value) > 3) return error.InvalidEnum;
 }
 fn marshalFilters(filters: []const Filter, out: []c.SwLobbyFilter) Error!void {
     std.debug.assert(filters.len == out.len);
@@ -430,7 +428,7 @@ fn marshalFilters(filters: []const Filter, out: []c.SwLobbyFilter) Error!void {
                 native.kind = 0;
                 native.key = f.key.ptr;
                 native.text = f.value.ptr;
-                native.comparison = @intFromEnum(f.comparison);
+                native.comparison = @backingInt(f.comparison);
             },
             .numerical => |f| {
                 try validateKey(f.key);
@@ -438,7 +436,7 @@ fn marshalFilters(filters: []const Filter, out: []c.SwLobbyFilter) Error!void {
                 native.kind = 1;
                 native.key = f.key.ptr;
                 native.value = f.value;
-                native.comparison = @intFromEnum(f.comparison);
+                native.comparison = @backingInt(f.comparison);
             },
             .near => |f| {
                 try validateKey(f.key);
@@ -452,9 +450,9 @@ fn marshalFilters(filters: []const Filter, out: []c.SwLobbyFilter) Error!void {
                 native.value = @intCast(value);
             },
             .distance => |value| {
-                if (@intFromEnum(value) < 0 or @intFromEnum(value) > 3) return error.InvalidEnum;
+                if (@backingInt(value) < 0 or @backingInt(value) > 3) return error.InvalidEnum;
                 native.kind = 4;
-                native.value = @intFromEnum(value);
+                native.value = @backingInt(value);
             },
             .result_count => |value| {
                 if (value == 0) return error.InvalidLimit;
@@ -464,7 +462,7 @@ fn marshalFilters(filters: []const Filter, out: []c.SwLobbyFilter) Error!void {
             .compatible_members => |value| {
                 try validateId(value);
                 native.kind = 6;
-                native.lobby = @intFromEnum(value);
+                native.lobby = @backingInt(value);
             },
         }
     }
@@ -492,13 +490,13 @@ fn chatSize(size: i32, capacity: usize) Error!usize {
 }
 fn marshalServer(server: GameServer) Error!c.SwLobbyGameServer {
     if (server.steam_id == .invalid and (server.ipv4 == 0 or server.port == 0)) return error.InvalidId;
-    return .{ .steam_id = @intFromEnum(server.steam_id), .ipv4 = server.ipv4, .port = server.port };
+    return .{ .steam_id = @backingInt(server.steam_id), .ipv4 = server.ipv4, .port = server.port };
 }
 
 fn refPublicDeclsRecursive(comptime T: type) void {
     std.testing.refAllDecls(T);
-    inline for (comptime std.meta.declarations(T)) |decl| {
-        const value = @field(T, decl.name);
+    inline for (comptime std.meta.declarations(T)) |decl_name| {
+        const value = @field(T, decl_name);
         if (@TypeOf(value) == type) {
             switch (@typeInfo(value)) {
                 .@"struct", .@"enum", .@"union", .@"opaque" => refPublicDeclsRecursive(value),
@@ -518,17 +516,17 @@ test "Lobbies validates strings, supported enums and native integer bounds" {
     try std.testing.expectError(error.EmptyKey, validateKey(""));
     try std.testing.expectError(error.InteriorNul, validateKey("a\x00b"));
     try std.testing.expectError(error.InteriorNul, validateValue("a\x00b"));
-    const long_key = "k" ** (max_key_bytes + 1);
-    try std.testing.expectError(error.TooLarge, validateKey(long_key));
-    const long_value = "v" ** metadata_value_capacity;
-    try std.testing.expectError(error.TooLarge, validateValue(long_value));
+    const long_key: [max_key_bytes + 1:0]u8 = @splat('k');
+    try std.testing.expectError(error.TooLarge, validateKey(&long_key));
+    const long_value: [metadata_value_capacity:0]u8 = @splat('v');
+    try std.testing.expectError(error.TooLarge, validateValue(&long_value));
     try validateLimit(1);
     try validateLimit(max_members);
     try std.testing.expectError(error.InvalidLimit, validateLimit(0));
     try std.testing.expectError(error.InvalidLimit, validateLimit(max_members + 1));
     try std.testing.expectError(error.InvalidEnum, validateType(.private_unique));
-    try std.testing.expectError(error.InvalidEnum, validateType(@enumFromInt(500)));
-    try std.testing.expectError(error.InvalidEnum, validateComparison(@enumFromInt(-3)));
+    try std.testing.expectError(error.InvalidEnum, validateType(@fromBackingInt(@intCast(500))));
+    try std.testing.expectError(error.InvalidEnum, validateComparison(@fromBackingInt(@intCast(-3))));
     try std.testing.expectError(error.InvalidIndex, checkedIndex(3, 3));
     try std.testing.expectError(error.TooLarge, checkedIndex(@as(usize, std.math.maxInt(i32)) + 1, std.math.maxInt(u32)));
     try std.testing.expectEqual(@as(c_int, 2), try checkedIndex(2, 3));
@@ -542,7 +540,7 @@ test "lobby creation options validate before calling Steam" {
 }
 
 test "Lobbies filter marshalling preserves order, signed comparisons and IDs" {
-    const id: SteamId = @enumFromInt(0x0110000101020304);
+    const id: SteamId = @fromBackingInt(@intCast(0x0110000101020304));
     const filters = [_]Filter{
         .{ .string = .{ .key = "mode", .value = "coop", .comparison = .not_equal } },
         .{ .numerical = .{ .key = "rank", .value = -7, .comparison = .less_or_equal } },
@@ -556,14 +554,14 @@ test "Lobbies filter marshalling preserves order, signed comparisons and IDs" {
     try marshalFilters(&filters, &out);
     for (out, 0..) |f, i| try std.testing.expectEqual(@as(i32, @intCast(i)), f.kind);
     try std.testing.expectEqualStrings("coop", std.mem.span(out[0].text));
-    try std.testing.expectEqual(@intFromEnum(Comparison.not_equal), out[0].comparison);
+    try std.testing.expectEqual(@backingInt(Comparison.not_equal), out[0].comparison);
     try std.testing.expectEqual(@as(i32, -7), out[1].value);
-    try std.testing.expectEqual(@intFromEnum(Comparison.less_or_equal), out[1].comparison);
+    try std.testing.expectEqual(@backingInt(Comparison.less_or_equal), out[1].comparison);
     try std.testing.expectEqual(@as(i32, 90), out[2].value);
     try std.testing.expectEqual(@as(i32, 2), out[3].value);
-    try std.testing.expectEqual(@intFromEnum(Distance.worldwide), out[4].value);
+    try std.testing.expectEqual(@backingInt(Distance.worldwide), out[4].value);
     try std.testing.expectEqual(@as(i32, 17), out[5].value);
-    try std.testing.expectEqual(@intFromEnum(id), out[6].lobby);
+    try std.testing.expectEqual(@backingInt(id), out[6].lobby);
 }
 
 test "Lobbies rejects later invalid filters without entering native code" {
@@ -574,9 +572,9 @@ test "Lobbies rejects later invalid filters without entering native code" {
     const good: Filter = .{ .near = .{ .key = "rank", .value = 12 } };
     const bad = [_]Filter{
         .{ .string = .{ .key = "bad\x00key", .value = "v" } },
-        .{ .numerical = .{ .key = "rank", .value = 2, .comparison = @enumFromInt(19) } },
+        .{ .numerical = .{ .key = "rank", .value = 2, .comparison = @fromBackingInt(@intCast(19)) } },
         .{ .slots_available = max_members + 1 },
-        .{ .distance = @enumFromInt(7) },
+        .{ .distance = @fromBackingInt(@intCast(7)) },
         .{ .result_count = std.math.maxInt(u32) },
         .{ .compatible_members = .invalid },
     };
@@ -593,7 +591,7 @@ test "Lobbies metadata keeps native empty distinct from absence and checks termi
     try std.testing.expectError(error.OperationFailed, borrowedText(null));
     try std.testing.expectEqualStrings("key", try terminatedText("key\x00tail"));
     try std.testing.expectError(error.InvalidNativeResult, terminatedText("unterminated"));
-    const unterminated = [_]u8{'v'} ** metadata_value_capacity;
+    const unterminated: [metadata_value_capacity]u8 = @splat('v');
     try std.testing.expectError(error.InvalidNativeResult, borrowedText(&unterminated));
 }
 
@@ -607,12 +605,12 @@ test "Lobbies binary chat checks bounds without treating NUL as termination" {
     try std.testing.expectError(error.InvalidNativeResult, chatSize(-1, 4));
     try std.testing.expectError(error.InvalidNativeResult, chatSize(0, 4));
     try std.testing.expectError(error.InvalidNativeResult, chatSize(5, 4));
-    const unknown: ChatEntryType = @enumFromInt(123);
-    try std.testing.expectEqual(@as(i32, 123), @intFromEnum(unknown));
+    const unknown: ChatEntryType = @fromBackingInt(@intCast(123));
+    try std.testing.expectEqual(@as(i32, 123), @backingInt(unknown));
 
     var context: Context = undefined;
     const lobbies: Lobbies = .{ .lease = .{ .context = &context, .generation = 0 } };
-    const lobby: SteamId = @enumFromInt(1);
+    const lobby: SteamId = @fromBackingInt(@intCast(1));
     var buffer: [max_chat_bytes]u8 = undefined;
     try std.testing.expectError(error.BufferTooSmall, lobbies.readChat(lobby, 0, buffer[0..1]));
     try std.testing.expectError(error.TooLarge, lobbies.readChat(lobby, std.math.maxInt(u32), &buffer));
@@ -626,9 +624,9 @@ test "Lobbies game server marshalling accepts either transport and preserves sca
     try std.testing.expectEqual(@as(u32, 0x7f000001), ip.ipv4);
     try std.testing.expectEqual(@as(u16, 27015), ip.port);
     try std.testing.expectEqual(@as(u64, 0), ip.steam_id);
-    const id: SteamId = @enumFromInt(0x0110000101020304);
+    const id: SteamId = @fromBackingInt(@intCast(0x0110000101020304));
     const server = try marshalServer(.{ .steam_id = id });
-    try std.testing.expectEqual(@intFromEnum(id), server.steam_id);
+    try std.testing.expectEqual(@backingInt(id), server.steam_id);
     try std.testing.expectError(error.OperationFailed, succeeded(0));
     try std.testing.expectError(error.InvalidNativeResult, nativeCount(-1));
 }

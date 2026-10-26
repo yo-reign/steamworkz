@@ -4,9 +4,12 @@ const steamworkz_build = @import("steamworkz");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const sdk = b.pathFromRoot(b.option([]const u8, "sdk", "Official Steamworks SDK directory (overrides STEAMWORKS_SDK)") orelse
-        b.graph.environ_map.get("STEAMWORKS_SDK") orelse
-        @panic("Steamworkz requires the external Steamworks SDK 1.65: pass -Dsdk=/absolute/path/to/sdk or set STEAMWORKS_SDK to the directory containing public and redistributable_bin"));
+    const sdk = b.pathResolve(&.{
+        b.fmt("{f}", .{b.root}),
+        b.option([]const u8, "sdk", "Official Steamworks SDK directory (overrides STEAMWORKS_SDK)") orelse
+            b.graph.environ_map.get("STEAMWORKS_SDK") orelse
+            @panic("Steamworkz requires the external Steamworks SDK 1.65: pass -Dsdk=/absolute/path/to/sdk or set STEAMWORKS_SDK to the directory containing public and redistributable_bin"),
+    });
     const steamworkz = b.dependency("steamworkz", .{
         .target = target,
         .optimize = optimize,

@@ -106,7 +106,7 @@ fn deinitialize(self: *Client, comptime native_shutdown: @TypeOf(c.sw_shutdown))
 /// Development examples intentionally do not relaunch Steam or the game.
 pub fn restartIfNecessary(app: types.AppId) bool {
     if (app == .invalid) @panic("Steamworks restart requires a valid App ID");
-    return c.sw_restart_if_necessary(@intFromEnum(app)) != 0;
+    return c.sw_restart_if_necessary(@backingInt(app)) != 0;
 }
 
 /// SteamAPI_ManualDispatch_RunFrame for this session's pipe. Call once per render
@@ -141,7 +141,7 @@ fn nextEventWith(self: *Client, comptime native_poll: @TypeOf(c.sw_next_event)) 
 
 fn observeEvent(self: *Client, event: *const events.Event) void {
     Workshop.observeCompletion(self.context.lease(), event);
-    const call = @intFromEnum(event.call);
+    const call = @backingInt(event.call);
     if (call != 0 and call == self.context.leaderboard_download_call) {
         self.context.leaderboard_download_call = 0;
         self.context.leaderboard_download_blocked = switch (event.payload) {
@@ -154,7 +154,7 @@ fn observeEvent(self: *Client, event: *const events.Event) void {
     if (call != 0) return;
     switch (event.payload) {
         .gamepad_dismissed => |value| {
-            if (!value.matched or self.context.keyboard_state != .gamepad or @intFromEnum(value.app) != self.context.keyboard_app_id) return;
+            if (!value.matched or self.context.keyboard_state != .gamepad or @backingInt(value.app) != self.context.keyboard_app_id) return;
             self.context.keyboard_state = .none;
             self.context.keyboard_app_id = 0;
         },
@@ -180,12 +180,12 @@ fn downloadAccessComplete(value: *const types.LeaderboardEntries) bool {
 /// ISteamUser::GetSteamID: local user identity, not proof of online connectivity.
 pub fn userId(self: *const Client) types.SteamId {
     self.context.check();
-    return @enumFromInt(c.sw_user_id());
+    return @fromBackingInt(@intCast(c.sw_user_id()));
 }
 /// ISteamUtils::GetAppID: application ID of this initialized session.
 pub fn appId(self: *const Client) types.AppId {
     self.context.check();
-    return @enumFromInt(c.sw_app_id());
+    return @fromBackingInt(@intCast(c.sw_app_id()));
 }
 /// ISteamUser::BLoggedOn: current Steam-server connectivity; not peer authentication.
 pub fn loggedOn(self: *const Client) bool {
@@ -297,13 +297,13 @@ fn authSessionTicketWith(self: *const Client, buffer: []u8, recipient: ?types.St
     const capacity = try types.count(buffer.len);
     self.context.check();
     var size: u32 = 0;
-    const handle = native_ticket(buffer.ptr, capacity, &size, if (recipient) |id| @intFromEnum(id) else 0);
+    const handle = native_ticket(buffer.ptr, capacity, &size, if (recipient) |id| @backingInt(id) else 0);
     if (handle == 0) return error.TicketRejected;
     if (size > buffer.len) {
         native_cancel(handle);
         return error.InvalidNativeResult;
     }
-    return .{ .handle = @enumFromInt(handle), .bytes = buffer[0..size] };
+    return .{ .handle = @fromBackingInt(@intCast(handle)), .bytes = buffer[0..size] };
 }
 
 /// ISteamUser::GetAuthTicketForWebApi. Requires a nonempty, NUL-free service identity.
@@ -315,7 +315,7 @@ pub fn webApiTicket(self: *const Client, identity: [:0]const u8) !types.AuthTick
     self.context.check();
     const handle = c.sw_web_ticket(identity.ptr);
     if (handle == 0) return error.TicketRejected;
-    return @enumFromInt(handle);
+    return @fromBackingInt(@intCast(handle));
 }
 /// ISteamUser::CancelAuthTicket for an issued session or Web API ticket. Invalid
 /// is a no-op; valid handles are forwarded on every call, not deduplicated. The
@@ -326,7 +326,7 @@ pub fn cancelTicket(self: *const Client, ticket: types.AuthTicket) void {
 
 fn cancelTicketWith(self: *const Client, ticket: types.AuthTicket, comptime native_cancel: @TypeOf(c.sw_cancel_ticket)) void {
     self.context.check();
-    if (ticket != .invalid) native_cancel(@intFromEnum(ticket));
+    if (ticket != .invalid) native_cancel(@backingInt(ticket));
 }
 /// ISteamUser::BeginAuthSession. An immediate .ok is not final authentication. Observe auth_validated and
 /// later revocation events before granting or retaining application permissions.
@@ -334,20 +334,20 @@ pub fn beginAuthSession(self: *const Client, user: types.SteamId, ticket: []cons
     if (user == .invalid or ticket.len == 0) return error.InvalidTicket;
     const size = try types.count(ticket.len);
     self.context.check();
-    return @enumFromInt(c.sw_begin_auth(ticket.ptr, size, @intFromEnum(user)));
+    return @fromBackingInt(@intCast(c.sw_begin_auth(ticket.ptr, size, @backingInt(user))));
 }
 /// ISteamUser::EndAuthSession: stop tracking a peer when the session ends.
 /// Pair with an accepted beginAuthSession; this does not cancel your issued tickets.
 pub fn endAuthSession(self: *const Client, user: types.SteamId) void {
     self.context.check();
-    c.sw_end_auth(@intFromEnum(user));
+    c.sw_end_auth(@backingInt(user));
 }
 /// ISteamUser::UserHasLicenseForApp for an authenticated peer. Missing
 /// authentication is not an offline status.
 /// Use apps().owns(app) to query the local user's ownership instead.
 pub fn userLicense(self: *const Client, user: types.SteamId, app: types.AppId) License {
     self.context.check();
-    return @enumFromInt(c.sw_user_license(@intFromEnum(user), @intFromEnum(app)));
+    return @fromBackingInt(@intCast(c.sw_user_license(@backingInt(user), @backingInt(app))));
 }
 
 test "platform completion draining correlates slots and preserves keyboard ownership" {
@@ -584,7 +584,7 @@ test "capability completion observation precedes return even for discarded event
         }
         _ = client.nextEventWith(Native.poll); // No Request.take or caller event handling.
         try std.testing.expectEqual(@as(u64, 0), client.context.workshop_call);
-        try std.testing.expectEqual(@as(u64, 0), @intFromEnum(try query.handle()));
+        try std.testing.expectEqual(@as(u64, 0), @backingInt(try query.handle()));
         try std.testing.expectEqual(if (case == 0) Workshop.QueryState.ready else .failed, try query.state());
         try std.testing.expectEqual(if (case == 0) @as(?u32, 1) else null, try query.resultCount());
         Native.success();
@@ -648,7 +648,7 @@ fn initializationResult(result: i32) InitError!void {
 
 test "license results distinguish missing authentication from lack of ownership" {
     // EUserHasLicenseForAppResult::k_EUserHasLicenseResultNoAuth in SDK 1.65.
-    const result: License = @enumFromInt(2);
+    const result: License = @fromBackingInt(@intCast(2));
     try std.testing.expectEqual(License.not_authenticated, result);
     try std.testing.expect(result != .no_license);
 }
@@ -773,10 +773,10 @@ test "authSessionTicket forwards recipients and cancels malformed acceptance exa
     Native.context = &client.context;
     var buffer: [8]u8 = @splat(0x73);
     Native.buffer = &buffer;
-    for ([_]?types.SteamId{ null, @enumFromInt(73) }) |recipient| {
+    for ([_]?types.SteamId{ null, @fromBackingInt(@intCast(73)) }) |recipient| {
         for ([_]u32{ 0, 91 }) |handle| {
             for ([_]u32{ 0, 1, buffer.len, buffer.len + 1, std.math.maxInt(u32) }) |size| {
-                Native.recipient = if (recipient) |id| @intFromEnum(id) else 0;
+                Native.recipient = if (recipient) |id| @backingInt(id) else 0;
                 Native.handle = handle;
                 Native.size = size;
                 Native.calls = 0;
@@ -790,7 +790,7 @@ test "authSessionTicket forwards recipients and cancels malformed acceptance exa
                     try std.testing.expectEqual(@as(usize, 1), Native.cancellations);
                 } else {
                     const ticket = try result;
-                    try std.testing.expectEqual(handle, @intFromEnum(ticket.handle));
+                    try std.testing.expectEqual(handle, @backingInt(ticket.handle));
                     try std.testing.expectEqual(size, ticket.bytes.len);
                     try std.testing.expect(ticket.bytes.ptr == &buffer);
                     try std.testing.expectEqual(@as(usize, 0), Native.cancellations);
@@ -813,9 +813,7 @@ test "authSessionTicket forwards recipients and cancels malformed acceptance exa
 test "client shutdown disables diagnostics before native release" {
     const Probe = struct {
         // Exercise the required production C-ABI sink, not a public test hook.
-        const bridge = @cImport({
-            @cInclude("networking_debug.h");
-        });
+        const bridge = @import("steamworkz_c");
         var capture: NetworkingDebug.Capture = undefined;
         var called = false;
         var during: NetworkingDebug.Capture.Drain = undefined;
@@ -901,9 +899,6 @@ test "lifecycle control stable client and renewed empty receive" {
 
 test "platform fatal guard" {
     if (!@import("steamworkz_test_options").fatal_lifecycle) return error.SkipZigTest;
-    const libc = @cImport({
-        @cInclude("stdlib.h");
-    });
     const LeaseCase = enum { closed, stale, foreign, owner };
     const Method = enum {
         gamepad,
@@ -985,9 +980,8 @@ test "platform fatal guard" {
         client_deinit,
         client_close_batch,
     };
-    const lease_text = libc.getenv("STEAMWORKZ_GUARD_LEASE");
-    const method_text = libc.getenv("STEAMWORKZ_GUARD_METHOD");
-    if (lease_text == null or method_text == null) return error.MissingGuardSelection;
+    const lease_text = std.c.getenv("STEAMWORKZ_GUARD_LEASE") orelse return error.MissingGuardSelection;
+    const method_text = std.c.getenv("STEAMWORKZ_GUARD_METHOD") orelse return error.MissingGuardSelection;
     const lease_case = std.meta.stringToEnum(LeaseCase, std.mem.span(lease_text)) orelse return error.InvalidGuardSelection;
     const method = std.meta.stringToEnum(Method, std.mem.span(method_text)) orelse return error.InvalidGuardSelection;
     const Probe = struct {
@@ -1019,7 +1013,7 @@ test "platform fatal guard" {
             const cloud_api: services.Cloud = .{ .lease = self.lease };
             const stats_api: services.Stats = .{ .lease = self.lease };
             var buffer: [16]u8 = undefined;
-            const board: types.Leaderboard = @enumFromInt(1);
+            const board: types.Leaderboard = @fromBackingInt(@intCast(1));
             switch (self.method) {
                 .gamepad, .gamepad_pending => {
                     _ = utility.showGamepad(.{ .max_characters = 1 }) catch return;
@@ -1043,7 +1037,7 @@ test "platform fatal guard" {
                     _ = utility.filterText(.{ .context = .chat, .source = .invalid }, "", &.{}) catch return;
                 },
                 .filter_native => {
-                    _ = utility.filterText(.{ .context = .chat, .source = @enumFromInt(123456) }, "é!!", buffer[0..8]) catch return;
+                    _ = utility.filterText(.{ .context = .chat, .source = @fromBackingInt(@intCast(123456)) }, "é!!", buffer[0..8]) catch return;
                 },
                 .hardware => {
                     _ = utility.defaultConfig() catch return;
@@ -1100,13 +1094,13 @@ test "platform fatal guard" {
                     _ = controls.inputType(.all) catch return;
                 },
                 .translate_invalid => {
-                    _ = controls.translateOrigin(@enumFromInt(-1), .none) catch return;
+                    _ = controls.translateOrigin(@fromBackingInt(@intCast(-1)), .none) catch return;
                 },
                 .translate_native => {
                     _ = controls.translateOrigin(.unknown, .none) catch return;
                 },
                 .png_invalid => {
-                    _ = controls.glyphPNG(.none, @enumFromInt(-1), .{}, &buffer) catch return;
+                    _ = controls.glyphPNG(.none, @fromBackingInt(@intCast(-1)), .{}, &buffer) catch return;
                 },
                 .png_native => {
                     _ = controls.glyphPNG(.none, .small, .{}, &buffer) catch return;
@@ -1188,7 +1182,7 @@ test "platform fatal guard" {
                     _ = stats_api.nextGlobalPercentage(.invalid) catch return;
                 },
                 .percentage_next_native => {
-                    _ = stats_api.nextGlobalPercentage(@enumFromInt(0)) catch return;
+                    _ = stats_api.nextGlobalPercentage(@fromBackingInt(@intCast(0))) catch return;
                 },
                 .percentage_name_invalid => {
                     _ = stats_api.globalPercentage("") catch return;
@@ -1257,9 +1251,6 @@ test "platform fatal guard" {
 
 test "capability fatal guard" {
     if (!@import("steamworkz_test_options").fatal_lifecycle) return error.SkipZigTest;
-    const libc = @cImport({
-        @cInclude("stdlib.h");
-    });
     const LeaseCase = enum { closed, stale, foreign };
     const Method = enum {
         voice_start,
@@ -1369,9 +1360,8 @@ test "capability fatal guard" {
         client_workshop,
         client_screenshots,
     };
-    const lease_text = libc.getenv("STEAMWORKZ_GUARD_LEASE");
-    const method_text = libc.getenv("STEAMWORKZ_GUARD_METHOD");
-    if (lease_text == null or method_text == null) return error.MissingGuardSelection;
+    const lease_text = std.c.getenv("STEAMWORKZ_GUARD_LEASE") orelse return error.MissingGuardSelection;
+    const method_text = std.c.getenv("STEAMWORKZ_GUARD_METHOD") orelse return error.MissingGuardSelection;
     const lease_case = std.meta.stringToEnum(LeaseCase, std.mem.span(lease_text)) orelse return error.InvalidGuardSelection;
     const method = std.meta.stringToEnum(Method, std.mem.span(method_text)) orelse return error.InvalidGuardSelection;
     const Probe = struct {
@@ -1426,7 +1416,7 @@ test "capability fatal guard" {
             const workshop_api: Workshop = .{ .lease = self.lease };
             const query: Workshop.Query = .{ .lease = self.lease, .token = 1 };
             const screenshots_api: Screenshots = .{ .lease = self.lease };
-            const session: types.RemotePlaySession = @enumFromInt(73);
+            const session: types.RemotePlaySession = @fromBackingInt(@intCast(73));
             const marker: Timeline.Event = .{ .title = "", .description = "", .icon = "", .priority = 0 };
             var buffer: [16]u8 = @splat(0);
             var pcm: [8]i16 = @splat(0);
@@ -1503,19 +1493,19 @@ test "capability fatal guard" {
                     _ = remote.invite(.{ .friend = .invalid }) catch return;
                 },
                 .remote_invite_friend => {
-                    _ = remote.invite(.{ .friend = @enumFromInt(73) }) catch return;
+                    _ = remote.invite(.{ .friend = @fromBackingInt(@intCast(73)) }) catch return;
                 },
                 .remote_invite_guest => {
                     _ = remote.invite(.guest) catch return;
                 },
-                .timeline_mode_invalid => timeline_api.setMode(@enumFromInt(0)) catch return,
+                .timeline_mode_invalid => timeline_api.setMode(@fromBackingInt(@intCast(0))) catch return,
                 .timeline_mode => timeline_api.setMode(.playing) catch return,
                 .timeline_tooltip_invalid => timeline_api.setTooltip("bad\x00text", 0) catch return,
                 .timeline_tooltip => timeline_api.setTooltip("", 0) catch return,
                 .timeline_clear_invalid => timeline_api.clearTooltip(std.math.nan(f32)) catch return,
                 .timeline_clear => timeline_api.clearTooltip(0) catch return,
                 .timeline_instant_invalid => {
-                    _ = timeline_api.instant(marker, .{ .clip = @enumFromInt(0) }) catch return;
+                    _ = timeline_api.instant(marker, .{ .clip = @fromBackingInt(@intCast(0)) }) catch return;
                 },
                 .timeline_instant => {
                     _ = timeline_api.instant(marker, .{}) catch return;
@@ -1543,7 +1533,7 @@ test "capability fatal guard" {
                     _ = range.end(0) catch return;
                 },
                 .range_cancel, .range_cancel_closed => range.cancel() catch return,
-                .timeline_remove_zero => timeline_api.remove(@enumFromInt(0)) catch return,
+                .timeline_remove_zero => timeline_api.remove(@fromBackingInt(@intCast(0))) catch return,
                 .timeline_shutdown_empty, .timeline_shutdown_active => Timeline.shutdown(self.lease),
                 .workshop_create_empty => {
                     _ = workshop_api.createDetailsQuery(&.{}) catch return;
@@ -1571,7 +1561,7 @@ test "capability fatal guard" {
                     _ = query.release() catch return;
                 },
                 .workshop_observe_empty, .workshop_observe_pending => {
-                    const event: events.Event = .{ .call = @enumFromInt(91), .callback_id = 0, .payload = .malformed };
+                    const event: events.Event = .{ .call = @fromBackingInt(@intCast(91)), .callback_id = 0, .payload = .malformed };
                     Workshop.observeCompletion(self.lease, &event);
                 },
                 .workshop_shutdown_empty, .workshop_shutdown_active, .workshop_shutdown_pending, .workshop_shutdown_failed => Workshop.shutdown(self.lease),
@@ -1679,9 +1669,6 @@ test "capability fatal guard" {
 
 test "networking fatal guard" {
     if (!@import("steamworkz_test_options").fatal_lifecycle) return error.SkipZigTest;
-    const libc = @cImport({
-        @cInclude("stdlib.h");
-    });
     const LeaseCase = enum { closed, stale, foreign };
     const Method = enum {
         telemetry_empty,
@@ -1709,9 +1696,8 @@ test "networking fatal guard" {
         debug_stop,
         debug_shutdown,
     };
-    const lease_text = libc.getenv("STEAMWORKZ_GUARD_LEASE");
-    const method_text = libc.getenv("STEAMWORKZ_GUARD_METHOD");
-    if (lease_text == null or method_text == null) return error.MissingGuardSelection;
+    const lease_text = std.c.getenv("STEAMWORKZ_GUARD_LEASE") orelse return error.MissingGuardSelection;
+    const method_text = std.c.getenv("STEAMWORKZ_GUARD_METHOD") orelse return error.MissingGuardSelection;
     const lease_case = std.meta.stringToEnum(LeaseCase, std.mem.span(lease_text)) orelse return error.InvalidGuardSelection;
     const method = std.meta.stringToEnum(Method, std.mem.span(method_text)) orelse return error.InvalidGuardSelection;
     const Probe = struct {
@@ -1748,12 +1734,12 @@ test "networking fatal guard" {
                     var outcomes: [1]Networking.BatchSendOutcome = undefined;
                     _ = self.networking.sendBatch(&.{.{ .connection = .invalid, .payload = "probe", .lane = if (self.method == .batch_lane) 65535 else 0 }}, &outcomes) catch return;
                 },
-                .config_set_invalid => self.config.set(.global, @enumFromInt(999), 0) catch return,
+                .config_set_invalid => self.config.set(.global, @fromBackingInt(@intCast(999)), 0) catch return,
                 .config_set_native => self.config.set(.global, .send_buffer_bytes, 123) catch return,
-                .config_clear_invalid => self.config.clear(.global, @enumFromInt(999)) catch return,
+                .config_clear_invalid => self.config.clear(.global, @fromBackingInt(@intCast(999))) catch return,
                 .config_clear_native => self.config.clear(.global, .send_buffer_bytes) catch return,
                 .config_get_invalid => {
-                    _ = self.config.get(.global, @enumFromInt(999)) catch return;
+                    _ = self.config.get(.global, @fromBackingInt(@intCast(999))) catch return;
                 },
                 .config_get_native => {
                     _ = self.config.get(.global, .send_buffer_bytes) catch return;
@@ -1767,7 +1753,7 @@ test "networking fatal guard" {
                 .simulation_reset => {
                     _ = self.config.resetSimulation() catch return;
                 },
-                .debug_start_invalid => self.capture.start(@enumFromInt(0)) catch return,
+                .debug_start_invalid => self.capture.start(@fromBackingInt(@intCast(0))) catch return,
                 .debug_start_native => self.capture.start(.warning) catch return,
                 .debug_drain_empty => {
                     _ = self.capture.drain(&.{});

@@ -1,6 +1,6 @@
 # Steamworkz
 
-A game-facing Steamworks **1.65** package for **Zig 0.16.0**. Public game
+A game-facing Steamworks **1.65** package for **Zig 0.17.0**. Public game
 callers use Zig only; Steamworkz privately compiles its C++ bridge. No game is
 a dependency. This is a focused API, not a binding to every SDK feature.
 
@@ -110,8 +110,8 @@ It does not require an additional C++ standard library.
 | `zig build live-test` | Explicitly initialize Steam and run the bounded live checks |
 | `zig build tooling` | Write a local, gitignored `compile_commands.json` for native C++ editor analysis |
 
-All accept `-Dsdk=...`; optimization uses `-Doptimize=ReleaseSafe`, `ReleaseFast`,
-or `ReleaseSmall`. `test` requires SDK headers/libraries but does **not** initialize
+All accept `-Dsdk=...`. Optimization uses `-Doptimize=debug`, `safe`, `fast`,
+or `small`. `test` requires SDK headers/libraries but does **not** initialize
 Steam, log in, or contact Steam services. `tooling` generates editor configuration,
 not bindings. It uses the host compiler configuration; regenerate it if the SDK
 path changes. An exported `STEAMWORKS_SDK` also lets Zig language servers resolve
@@ -176,9 +176,12 @@ In your `build.zig`, resolve the SDK path relative to the consuming project and
 forward the resolved path to the dependency and runtime helpers:
 
 ```zig
-const sdk = b.pathFromRoot(b.option([]const u8, "sdk", "Official Steamworks SDK directory") orelse
-    b.graph.environ_map.get("STEAMWORKS_SDK") orelse
-    @panic("Pass -Dsdk=/absolute/path/to/sdk or set STEAMWORKS_SDK"));
+const sdk = b.pathResolve(&.{
+    b.fmt("{f}", .{b.root}),
+    b.option([]const u8, "sdk", "Official Steamworks SDK directory") orelse
+        b.graph.environ_map.get("STEAMWORKS_SDK") orelse
+        @panic("Pass -Dsdk=/absolute/path/to/sdk or set STEAMWORKS_SDK"),
+});
 const steamworkz = b.dependency("steamworkz", .{
     .target = target,
     .optimize = optimize,
@@ -186,7 +189,7 @@ const steamworkz = b.dependency("steamworkz", .{
 });
 exe.root_module.addImport("steamworkz", steamworkz.module("steamworkz"));
 if (target.result.os.tag == .linux) {
-    // Zig 0.16's native ELF linker cannot handle newer CRT .sframe relocations.
+    // Retain the validated Linux LLVM/LLD policy during the compiler migration.
     exe.use_llvm = true;
     exe.use_lld = true;
     // Keep SDK lookup at link time; preserve the explicit $ORIGIN runtime path.
@@ -227,7 +230,7 @@ explicit runtime search path so the installed game can find its adjacent
 `libsteam_api.so` after the game folder is moved. The SDK is needed to build the
 game, not as a directory installed on players' machines.
 
-Zig 0.16 can also automatically add link-time library directories to RUNPATH,
+Zig can also automatically add link-time library directories to RUNPATH,
 including the developer's SDK directory. The `each_lib_rpath = false` setting
 above disables those automatic entries while retaining explicit paths such as
 `$ORIGIN`. Without it, a missing adjacent runtime can be masked by the SDK copy.
@@ -253,12 +256,61 @@ resolution with `LD_LIBRARY_PATH` and `LD_PRELOAD` unset. A loader-only inspecti
 checks deployment without initializing Steam; actual game execution is a separate
 live check.
 
+## Zig 0.17 migration
+
+The game-facing API and ownership rules stay unchanged. The migration changes
+compiler interfaces and build plumbing:
+
+| Before | Zig 0.17 | Why |
+| --- | --- | --- |
+| Source `@cImport` blocks | Pinned `translate_c` 2.0.2 build dependency and `@import("steamworkz_c")` | C translation moved out of the compiler |
+| `b.pathFromRoot(path)` | `b.pathResolve(&.{ b.fmt("{f}", .{b.root}), path })` | SDK paths stay relative to the owning project |
+| `b.args` / `run.addArgs(args)` | `run.addPassthruArgs()` | Run arguments no longer belong to build configuration |
+| `std.builtin.OptimizeMode`, `.ReleaseFast` | `std.lang.Optimize`, `.fast` | Optimization modes moved and use lowercase names |
+| `@intFromEnum(value)` | `@backingInt(value)` | One operation reads enum and packed-struct backing integers |
+| `@enumFromInt(raw)` | `@fromBackingInt(@intCast(raw))` | The result type determines the required backing integer type |
+| `[_]u8{0} ** N` | `@as([N]u8, @splat(0))` | Array repetition is removed. The destination supplies the length |
+| `std.meta.fields(T)` | `@typeInfo(T).@"struct".field_names` and `@FieldType(T, name)` | Reflection exposes names and types separately instead of field records |
+| `allocator.dupeZ(u8, text)` | `allocator.dupeSentinel(u8, text, 0)` | Sentinel APIs now specify the sentinel explicitly |
+| `std.fmt.bufPrintZ(buf, fmt, args)` | `std.mem.printSentinel(buf, fmt, args, 0)` | Buffer formatting moves to `std.mem` |
+| `std.fmt.allocPrintSentinel(allocator, fmt, args, 0)` | `allocator.printSentinel(fmt, args, 0)` | Allocating formatting moves to the allocator |
+
+`std.meta.declarations(T)` now returns declaration names directly. Private schema
+checks use those names and `field_types` where only payload types are needed.
+`zig fmt` performs enum-conversion and optimization-name migrations automatically.
+The explicit `@intCast` preserves the backing-type conversion previously supplied
+by `@enumFromInt`. Unknown enum values remain valid where the enum permits them.
+
+The translator runs on the build host but emits declarations for the selected
+target. It translates only Steamworkz-owned C headers. The C++ bridge still
+compiles against the external official SDK. Generated bindings stay in the cache.
+The lifecycle runner has separate target-aware libc imports. It retains Darwin's
+POSIX feature selection and the Linux translation-only `_FORTIFY_SOURCE` override.
+Release-mode lifecycle and owner-thread checks remain active.
+
+Run-step APIs use `setName` and the explicit `add*Arg2(..., options)` variants.
+The nested consumer invokes `.zig_exe`, not a compiler found through PATH.
+Its cache paths resolve at execution time. `--pkg-dir` keeps extracted packages
+outside relocated source, and `ZIG_GLOBAL_CACHE_DIR` selects the global cache.
+Zig 0.17's `build` and `fetch` commands no longer accept `--global-cache-dir`.
+The source checker uses fresh external caches and audits the actual fetched archive.
+
+Linux keeps LLVM/LLD and explicit adjacent-runtime lookup. This migration does
+not adopt a new linker, initialize Steam, run tutorials, or change SDK distribution.
+Historical 0.16 results below remain historical. Current validation belongs in
+[CHECKPOINT.md](CHECKPOINT.md). See the
+[Zig release notes](https://ziglang.org/download/0.17.0/release-notes.html) and
+[official translator](https://codeberg.org/ziglang/translate-c) for upstream details.
+
 ## Editor setup
 
-Use matching **Zig 0.16.0 and ZLS 0.16.0**. Start the editor/language server with
+Use matching **Zig 0.17.0 and ZLS 0.17.0**. Check the compiler selected by the
+editor as well as the terminal. A stale Zig PATH entry can report valid 0.17
+builtins as errors. Start the editor/language server with
 `STEAMWORKS_SDK` available, or supply the library's `sdk` build option through a
 local `zls.build.json`. A terminal export does not update an already-running editor.
-The SDK is still external; no header copy or binding-generation step is needed.
+The SDK stays external. The package build handles C translation. No manual header
+copy or binding-generation command is needed.
 
 ZLS evaluates the build graph to discover imports. If your project conditionally
 adds Steamworkz, enable your project's option for the editor too. For example,
@@ -285,11 +337,11 @@ pinned by your project**, not an unrelated checkout. A successful SDK-free
 build configuration can still omit Steamworkz entirely; unresolved Steam imports
 in that mode do not mean the package is broken.
 
-ZLS 0.16 has a remaining generic-navigation limitation: the tested lobby
-completion fields navigate to `Event.LobbyCreated`, but `take` hover can list
-multiple possible results and its method go-to-definition may not resolve.
-Open [`Request`](src/requests.zig) directly in that case; the compiler still
-specializes and checks the exact completion type without caller annotations.
+Earlier ZLS 0.16 checks found a generic-navigation limitation: lobby completion
+fields resolved, but `take` hover and method navigation remained ambiguous.
+Those checks are historical, not evidence about ZLS 0.17. If navigation fails,
+open [`Request`](src/requests.zig) directly. The compiler still specializes and
+checks the exact completion type without caller annotations.
 
 For the private C++ adapter, `zig build tooling -Dsdk=...` writes a gitignored
 `compile_commands.json` for clangd. It is not needed to use the public Zig API;
@@ -348,7 +400,7 @@ defer if (joined != .invalid) lobbies.leave(joined) catch {};
 // Inside the application's explicit event loop:
 if (try request.take(&event)) |created| {
     if (created.result != .ok) {
-        std.log.err("Steam rejected lobby creation: {d}", .{@intFromEnum(created.result)});
+        std.log.err("Steam rejected lobby creation: {d}", .{@backingInt(created.result)});
         return error.LobbyRejected;
     }
     if (created.lobby == .invalid) return error.InvalidLobbyResult;
@@ -375,7 +427,7 @@ Search completions instead return a count. Cloud-write completions return a
 
 Ordinary broadcasts have `.invalid` call IDs and never complete a tracker.
 A lobby operation can emit both a correlated result and a broadcast.
-Output enums retain unknown values. Use `@intFromEnum` when logging them.
+Output enums retain unknown values. Use `@backingInt` when logging them.
 
 Borrowed service leases detect closed/moved clients, wrong-thread use, and stale
 sessions in release modes too. These checks do not make freed client storage safe
@@ -420,7 +472,7 @@ const net = client.networking();
 switch (try net.send(connection, bytes, .{ .reliability = .reliable, .no_nagle = true })) {
     .accepted => |number| { _ = number; }, // Local acceptance, not remote delivery.
     .rejected => |result| {
-        std.log.err("Steam rejected the send: {d}", .{@intFromEnum(result)});
+        std.log.err("Steam rejected the send: {d}", .{@backingInt(result)});
         return error.SendRejected;
     },
 }
