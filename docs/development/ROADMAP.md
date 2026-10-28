@@ -36,7 +36,7 @@ Windows GNU is the verified cross-compilation target.
 A test that cannot run is `blocked` or `not run`, never passed.
 Source acceptance does not establish hardware, remote-service, or production-runtime readiness.
 
-Current execution state, ownership, approvals, and next actions live in [CHECKPOINT.md](CHECKPOINT.md).
+Current execution state, ownership, approvals, and next actions live in [CHECKPOINT.md](./CHECKPOINT.md).
 
 ## Existing foundation
 
@@ -188,7 +188,7 @@ and ZLS/native-Linux probes. Keep the existing flat-export bridge, explicit
 ownership and caller syntax. All seven items are source-accepted. The user
 subsequently authorized commits and normal pushes to both repositories after
 fresh offline build/run checks; no live Steam actions or game dependency repin
-are authorized. See [CHECKPOINT.md](CHECKPOINT.md) for validation counts,
+are authorized. See [CHECKPOINT.md](./CHECKPOINT.md) for validation counts,
 publication boundaries and the disclosed ZLS method-navigation trade-off.
 
 | ID | Work | Acceptance |

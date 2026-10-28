@@ -23,7 +23,7 @@
 
 ## Coordination
 
-- Read ROADMAP.md and CHECKPOINT.md before work. Their current authority and lane ownership apply.
+- Read [docs/development/ROADMAP.md](docs/development/ROADMAP.md) and [docs/development/CHECKPOINT.md](docs/development/CHECKPOINT.md) before work. Their current authority and lane ownership apply.
 - The approved implementation batch waives individual patch approval only for that documented scope.
 - One writer owns each checkout/worktree. Use isolated worktrees for concurrent writers.
 - Children may edit only their assigned files/contracts. They may not stage, commit, push, publish, run live checks, or delegate unless explicitly assigned that authority.

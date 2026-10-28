@@ -12,7 +12,9 @@ import tarfile
 from pathlib import Path, PurePosixPath
 
 PACKAGE_FILES = frozenset([
-    "build.zig", "build.zig.zon", "README.md", "LICENSE", "ROADMAP.md", "CHECKPOINT.md",
+    "build.zig", "build.zig.zon", "README.md", "LICENSE",
+    "docs/api.md", "docs/building.md", "docs/lifecycle.md", "docs/migration.md", "docs/networking.md", "docs/services.md",
+    "docs/development/README.md", "docs/development/ROADMAP.md", "docs/development/CHECKPOINT.md",
     "c/core.cpp", "c/core.h", "c/networking.cpp", "c/networking.h", "c/lobbies.cpp", "c/lobbies.h",
     "c/services.cpp", "c/services.h", "c/types.h", "c/utils.cpp", "c/utils.h", "c/input.cpp", "c/input.h",
     "c/networking_config.cpp", "c/networking_config.h", "c/networking_debug.cpp", "c/networking_debug.h",
@@ -60,6 +62,11 @@ def read_sources(root):
         "git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"
     ]).decode().split("\0")
     names = set(filter(None, names))
+    # Cached names include unstaged deletions; audit the current working tree.
+    deleted = subprocess.check_output([
+        "git", "-C", str(root), "ls-files", "--deleted", "-z"
+    ]).decode().split("\0")
+    names.difference_update(filter(None, deleted))
     require(names == REPOSITORY_FILES, "unexpected/missing repository inputs: " + repr(sorted(names ^ REPOSITORY_FILES)))
     files = {}
     for name in sorted(names):
@@ -184,9 +191,33 @@ def self_test():
         except RuntimeError:
             continue
         raise RuntimeError("unsafe content accepted")
-    # Exercise archive validation, including links and valid but unexpected inputs.
+    # Exercise working-tree inventory with an unstaged deletion and added file.
     import tempfile
+    from unittest.mock import patch
     with tempfile.TemporaryDirectory() as directory:
+        inventory = Path(directory) / "inventory"
+        inventory.mkdir()
+        for name in REPOSITORY_FILES:
+            path = inventory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"owned text\n")
+        for bad in (None, "missing", "extra"):
+            names = set(REPOSITORY_FILES) | {"old-document.md"}
+            if bad == "missing":
+                names.remove("README.md")
+            if bad == "extra":
+                names.add("unexpected.md")
+            listed = ("\0".join(sorted(names)) + "\0").encode()
+            with patch.object(subprocess, "check_output", side_effect=[listed, b"old-document.md\0"]):
+                try:
+                    read_sources(inventory)
+                except RuntimeError as err:
+                    require(bad is not None and "unexpected/missing repository inputs" in str(err),
+                            "valid working-tree inventory rejected or wrong failure")
+                else:
+                    require(bad is None, "invalid working-tree inventory accepted: " + str(bad))
+
+        # Exercise archive validation, including links and valid but unexpected inputs.
         archive = Path(directory) / "probe.tar.gz"
         expected = dict.fromkeys(PACKAGE_FILES, b"owned text\n")
         for bad in (None, "link", "extra", "missing", "changed", "traversal", "duplicate"):

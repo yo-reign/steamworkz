@@ -6,7 +6,7 @@ Deliver an independently consumable Steamworks package for production-oriented i
 Keep native SDK adaptation private inside Steamworkz.
 Track source completion separately from platform, device, account, backend, and game-specific release readiness.
 
-Full scope and acceptance criteria: [ROADMAP.md](ROADMAP.md).
+Full scope and acceptance criteria: [ROADMAP.md](./ROADMAP.md).
 
 ## Zig 0.17 migration — 2026-10-26
 
@@ -51,7 +51,7 @@ Raw logs, archive hashes and diagnostics remain outside source in private eviden
 
 ## Historical DX batch — 2026-10-21
 
-The user approved all seven [DX follow-up items](ROADMAP.md#dx--approved-usability-and-robustness-follow-up)
+The user approved all seven [DX follow-up items](./ROADMAP.md#dx--approved-usability-and-robustness-follow-up)
 as a bounded implementation batch after reviewing the research proposal:
 declaration-local docs, navigable request results, editor setup, focused examples,
 Linux build/deployment consistency, initialization/ticket failure tests, and

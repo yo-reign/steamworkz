@@ -149,8 +149,9 @@ The evidence directory must be new and disjoint from both source and SDK. It is
 retained on failure, mode 0700, with private files. Do not publish it. The checker:
 
 1. Inventories current tracked plus nonignored untracked sources against an exact
-   owned-file allowlist. This includes uncommitted candidate changes, not stale
-   HEAD bytes. Ignored caches/config/SDK paths are never copied. New owned files
+   owned-file allowlist, excluding tracked files deleted from the working tree.
+   This includes uncommitted moves and changes, not stale HEAD bytes. Ignored
+   caches/config/SDK paths are never copied. New owned files
    require deliberate inventory and manifest updates. Git and repository-only
    CI/policy inputs are omitted from the actual Zig package by its manifest.
 2. Copies regular UTF-8 source only into a fresh snapshot. It rejects symlinks,
